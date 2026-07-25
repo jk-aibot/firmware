@@ -29,3 +29,23 @@ runs:
       run: |
         python -m pip install --upgrade pip
         pip install -r .github/actions/setup-base/requirements.txt
+        # Fork scaffold: PIO 6.2.0 + pioarduino tool-scons break ESP32 builds
+        # (SCons.Tool.FortranCommon missing). Best-effort seeding, never fatal.
+        pio pkg install --global --no-save \
+          "https://github.com/pioarduino/registry/releases/download/0.0.1/scons-4.8.1.zip" || true
+        pio pkg install --global --no-save \
+          "https://github.com/pioarduino/scons/releases/download/4.11.1/scons-local-4.11.1.tar.gz" || true
+        for d in "$HOME/.platformio/packages"/tool-scons*; do
+          [ -d "$d" ] || continue
+          f=$(find "$d" -type d -name Tool -path "*SCons*" | head -1)
+          [ -n "$f" ] && printf '%s\n' \
+            '# PIO 6.2.0 compat: SCons >=4.9 removed this module; any attribute resolves to a no-op.' \
+            'def __getattr__(name):' \
+            '    return lambda *a, **k: None' \
+            > "$f/FortranCommon.py" || true
+        done
+
+    - name: Report platformio version
+      shell: bash
+      run: |
+        pio --version
