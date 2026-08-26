@@ -2499,26 +2499,20 @@ static void test_toggleNodeMuted_unknownNodeDoesNothing()
     TEST_ASSERT_NULL(nodeDB->getMeshNode(0xDEADBEEF));
 }
 
-// CHARACTERIZATION OF A KNOWN DEFECT, not an endorsement. Flipping one NodeInfoLite bit currently
-// calls bare nodeDB->saveToDisk(), which rewrites all five segments. saveToDisk() is not virtual,
-// so the mask is observed through its effect: every prefs file reappears after being removed.
-//
-// A pending fix narrows this to SEGMENT_NODEDATABASE. When it lands, only nodes.proto should come
-// back and this assertion is EXPECTED to change - that diff is the point, so the improvement is
-// visible instead of silent.
-static void test_toggleNodeMuted_currentlyRewritesEverySegment()
+static void test_toggleNodeMuted_persistsOnlyNodeDatabase()
 {
     nodeDB->getOrCreateMeshNode(TEST_NODE_NUM);
 
-    const char *segmentFiles[] = {configFileName, moduleConfigFileName, deviceStateFileName, channelFileName,
-                                  nodeDatabaseFileName};
-    for (const char *f : segmentFiles)
+    const char *unrelatedSegmentFiles[] = {configFileName, moduleConfigFileName, deviceStateFileName, channelFileName};
+    for (const char *f : unrelatedSegmentFiles)
         FSCom.remove(f);
+    FSCom.remove(nodeDatabaseFileName);
 
     graphics::menuHandler::toggleNodeMuted(TEST_NODE_NUM);
 
-    for (const char *f : segmentFiles)
-        TEST_ASSERT_TRUE_MESSAGE(FSCom.exists(f), f);
+    TEST_ASSERT_TRUE(FSCom.exists(nodeDatabaseFileName));
+    for (const char *f : unrelatedSegmentFiles)
+        TEST_ASSERT_FALSE_MESSAGE(FSCom.exists(f), f);
 }
 
 // -----------------------------------------------------------------------
@@ -2843,7 +2837,7 @@ void setup()
     // Node menu mute toggle
     RUN_TEST(test_toggleNodeMuted_flipsBitAndSkipsRadioReload);
     RUN_TEST(test_toggleNodeMuted_unknownNodeDoesNothing);
-    RUN_TEST(test_toggleNodeMuted_currentlyRewritesEverySegment);
+    RUN_TEST(test_toggleNodeMuted_persistsOnlyNodeDatabase);
 
     // BaseUI region chooser preset default
 #ifndef USERPREFS_LORACONFIG_MODEM_PRESET
