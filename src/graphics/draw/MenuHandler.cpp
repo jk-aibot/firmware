@@ -3326,7 +3326,7 @@ void menuHandler::toggleNodeMuted(uint32_t nodeNum)
     nodeInfoLiteSetBit(n, NODEINFO_BITFIELD_IS_MUTED_MASK, !wasMuted);
     LOG_INFO(wasMuted ? "Unmuted node 0x%08x" : "Muted node 0x%08x", nodeNum);
     nodeDB->notifyObservers(true);
-    nodeDB->saveToDisk();
+    nodeDB->saveToDisk(SEGMENT_NODEDATABASE);
 }
 
 void menuHandler::saveUIConfig()
