@@ -482,7 +482,6 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
         break;
     }
     case meshtastic_AdminMessage_commit_edit_settings_tag: {
-        disableBluetooth();
         LOG_INFO("Commit settings edit transaction");
         hasOpenEditTransaction = false;
         deferredEditSegments = 0;
@@ -662,11 +661,12 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
     }
     case meshtastic_AdminMessage_restore_preferences_tag: {
         LOG_INFO("Client requests preferences restore");
-        if (nodeDB->restorePreferences(r->backup_preferences,
+        if (nodeDB->restorePreferences(r->restore_preferences,
                                        SEGMENT_DEVICESTATE | SEGMENT_CONFIG | SEGMENT_MODULECONFIG | SEGMENT_CHANNELS)) {
             myReply = allocErrorResponse(meshtastic_Routing_Error_NONE, &mp);
             LOG_DEBUG("Rebooting after preferences restore");
-            disableBluetooth();
+            // reboot() accepts seconds. Keep the active transport alive so want_response clients
+            // can receive the success reply before the scheduled reboot owns final teardown.
             reboot(DEFAULT_REBOOT_SECONDS);
         } else {
             myReply = allocErrorResponse(meshtastic_Routing_Error_BAD_REQUEST, &mp);
@@ -2503,8 +2503,25 @@ void AdminModule::warnOnLoraPresetChange(const meshtastic_Config_LoRaConfig &old
     }
 } // warnOnLoraPresetChange
 
+#ifdef PIO_UNIT_TESTING
+static uint32_t disableBluetoothCallCountForTest = 0;
+
+uint32_t getDisableBluetoothCallCountForTest()
+{
+    return disableBluetoothCallCountForTest;
+}
+
+void resetDisableBluetoothCallCountForTest()
+{
+    disableBluetoothCallCountForTest = 0;
+}
+#endif
+
 void disableBluetooth()
 {
+#ifdef PIO_UNIT_TESTING
+    disableBluetoothCallCountForTest++;
+#endif
 #if HAS_BLUETOOTH
 #ifdef ARCH_ESP32
     if (nimbleBluetooth)
