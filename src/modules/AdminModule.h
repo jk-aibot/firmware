@@ -176,3 +176,7 @@ static constexpr const char *publicChannelPrecisionMessage =
 extern AdminModule *adminModule;
 
 void disableBluetooth();
+#ifdef PIO_UNIT_TESTING
+uint32_t getDisableBluetoothCallCountForTest();
+void resetDisableBluetoothCallCountForTest();
+#endif
