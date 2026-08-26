@@ -20,6 +20,7 @@
 #include "RadioInterface.h"
 #include "TestUtil.h"
 #include "graphics/draw/MenuHandler.h"
+#include "main.h"
 #include "mesh/Channels.h"
 #include "mesh/CryptoEngine.h" // crypto global: the tests swap in a stub engine to drive key derivation
 #include "mesh/Router.h"       // router global: allocErrorResponse() allocates the reply through it
@@ -2109,11 +2110,13 @@ static meshtastic_Channel makeChannel(int8_t index, meshtastic_Channel_Role role
 
 // Dispatch one admin message as if it arrived from a local (from==0) client, which bypasses
 // the passkey/authorization gates so the switch body runs.
-static void sendAdmin(meshtastic_AdminMessage &m)
+static void sendAdmin(meshtastic_AdminMessage &m, bool wantResponse = false, uint32_t packetId = 0)
 {
     meshtastic_MeshPacket mp = meshtastic_MeshPacket_init_zero;
     mp.from = 0;
+    mp.id = packetId;
     mp.which_payload_variant = meshtastic_MeshPacket_decoded_tag; // required: handler drops non-decoded packets
+    mp.decoded.want_response = wantResponse;
     testAdmin->handleReceivedProtobuf(mp, &m);
 }
 
@@ -2133,12 +2136,12 @@ static void sendBeginEdit()
     sendAdmin(m);
 }
 
-static void sendCommitEdit()
+static void sendCommitEdit(bool wantResponse = false, uint32_t packetId = 0)
 {
     meshtastic_AdminMessage m = meshtastic_AdminMessage_init_zero;
     m.which_payload_variant = meshtastic_AdminMessage_commit_edit_settings_tag;
     m.commit_edit_settings = true;
-    sendAdmin(m);
+    sendAdmin(m, wantResponse, packetId);
 }
 
 // An admin message that changes nothing. It answers, so drain the reply or the packet pool leaks.
@@ -2506,6 +2509,69 @@ static void test_presetForRegionSelection_ignoresNodesOnRawModemSettings()
 }
 #endif // HAS_SCREEN
 
+static void assertRoutingSuccessReply(uint32_t requestId)
+{
+    const auto *reply = testAdmin->reply();
+    TEST_ASSERT_NOT_NULL(reply);
+    TEST_ASSERT_EQUAL_UINT32(requestId, reply->decoded.request_id);
+    TEST_ASSERT_EQUAL(meshtastic_PortNum_ROUTING_APP, reply->decoded.portnum);
+
+    meshtastic_Routing routing = meshtastic_Routing_init_zero;
+    TEST_ASSERT_TRUE(
+        pb_decode_from_bytes(reply->decoded.payload.bytes, reply->decoded.payload.size, &meshtastic_Routing_msg, &routing));
+    TEST_ASSERT_EQUAL(meshtastic_Routing_Error_NONE, routing.error_reason);
+}
+
+static meshtastic_ModuleConfig makeCommitResponseMqttModuleConfig()
+{
+    meshtastic_ModuleConfig config = meshtastic_ModuleConfig_init_zero;
+    config.which_payload_variant = meshtastic_ModuleConfig_mqtt_tag;
+    config.payload_variant.mqtt = meshtastic_ModuleConfig_MQTTConfig_init_zero;
+    return config;
+}
+
+static void test_commitResponse_keepsTransportAliveUntilScheduledReboot()
+{
+    sendBeginEdit();
+    TEST_ASSERT_TRUE(testAdmin->handleSetModuleConfig(makeCommitResponseMqttModuleConfig()));
+    resetDisableBluetoothCallCountForTest();
+
+    constexpr uint32_t requestId = 0xC011117;
+    sendCommitEdit(true, requestId);
+
+    assertRoutingSuccessReply(requestId);
+    TEST_ASSERT_FALSE(testAdmin->editTransactionOpen());
+    TEST_ASSERT_EQUAL_UINT32(0, getDisableBluetoothCallCountForTest());
+    testAdmin->drainReply();
+}
+
+static void test_restorePreferences_replyPrecedesDefaultRebootAndTransportTeardown()
+{
+    TEST_ASSERT_TRUE(nodeDB->backupPreferences(meshtastic_AdminMessage_BackupLocation_FLASH));
+    rebootAtMsec = 0;
+    resetDisableBluetoothCallCountForTest();
+
+    meshtastic_AdminMessage restore = meshtastic_AdminMessage_init_zero;
+    restore.which_payload_variant = meshtastic_AdminMessage_restore_preferences_tag;
+    restore.restore_preferences = meshtastic_AdminMessage_BackupLocation_FLASH;
+    constexpr uint32_t requestId = 0xBA6C001;
+    const uint32_t beforeRestore = millis();
+    sendAdmin(restore, true, requestId);
+
+    assertRoutingSuccessReply(requestId);
+    TEST_ASSERT_NOT_EQUAL(0, rebootAtMsec);
+    const uint32_t scheduledDelayMs = rebootAtMsec - beforeRestore;
+    TEST_ASSERT_TRUE_MESSAGE(scheduledDelayMs >= DEFAULT_REBOOT_SECONDS * 1000,
+                             "restore reboot was scheduled earlier than the default delay");
+    TEST_ASSERT_TRUE_MESSAGE(scheduledDelayMs < (DEFAULT_REBOOT_SECONDS + 2) * 1000,
+                             "restore reboot delay is unexpectedly long; reboot() takes seconds, not milliseconds");
+    TEST_ASSERT_EQUAL_UINT32(0, getDisableBluetoothCallCountForTest());
+
+    testAdmin->drainReply();
+    rebootAtMsec = 0;
+    FSCom.remove(backupFileName);
+}
+
 // -----------------------------------------------------------------------
 // Test runner
 // -----------------------------------------------------------------------
@@ -2665,6 +2731,8 @@ void setup()
     RUN_TEST(test_editTransaction_active_isNotRetired);
     RUN_TEST(test_warn_license_noTransaction_emittedImmediately);
     RUN_TEST(test_warn_license_transaction_coalescedToSingleMessage);
+    RUN_TEST(test_commitResponse_keepsTransportAliveUntilScheduledReboot);
+    RUN_TEST(test_restorePreferences_replyPrecedesDefaultRebootAndTransportTeardown);
 
     // Node-DB metadata saves must not reconfigure the radio
     RUN_TEST(test_setFavoriteNode_skipsRadioReload_butPersists);
