@@ -23,6 +23,8 @@
 #include "mesh/Channels.h"
 #include "mesh/CryptoEngine.h" // crypto global: the tests swap in a stub engine to drive key derivation
 #include "mesh/Router.h"       // router global: allocErrorResponse() allocates the reply through it
+#include "mesh/Router.h" // router global: allocErrorResponse() allocates the reply through it
+#include "mesh/TypeConversions.h"
 #include "modules/AdminModule.h"
 #include "modules/NodeInfoModule.h"
 #include <ErriezCRC32.h> // crc32Buffer(), for the my_node_num == crc32(public_key) invariant
@@ -1342,6 +1344,70 @@ static void test_restorePreferences_sanitizesLicensedBackupBeforeReturn()
     nodeDB = savedNodeDB;
 }
 
+static void test_restorePreferences_ownerIsVisibleThroughSelfNodeImmediately()
+{
+    const uint32_t self = nodeDB->getNodeNum();
+    const meshtastic_User originalOwner = owner;
+    const auto originalSecurity = config.security;
+    meshtastic_NodeInfoLite *selfEntry = nodeDB->getMeshNode(self);
+    TEST_ASSERT_NOT_NULL(selfEntry);
+    const meshtastic_NodeInfoLite originalSelf = *selfEntry;
+
+    meshtastic_User backedUpOwner = owner;
+    strncpy(backedUpOwner.long_name, "Backup Owner", sizeof(backedUpOwner.long_name) - 1);
+    backedUpOwner.long_name[sizeof(backedUpOwner.long_name) - 1] = '\0';
+    strncpy(backedUpOwner.short_name, "BKUP", sizeof(backedUpOwner.short_name) - 1);
+    backedUpOwner.short_name[sizeof(backedUpOwner.short_name) - 1] = '\0';
+    backedUpOwner.has_is_unmessagable = true;
+    backedUpOwner.is_unmessagable = true;
+    config.security.public_key.size = 32;
+    memset(config.security.public_key.bytes, 0x3a, sizeof(config.security.public_key.bytes));
+    backedUpOwner.public_key.size = 32;
+    memcpy(backedUpOwner.public_key.bytes, config.security.public_key.bytes, sizeof(backedUpOwner.public_key.bytes));
+    owner = backedUpOwner;
+    TypeConversions::CopyUserToNodeInfoLite(selfEntry, owner);
+    TEST_ASSERT_TRUE(nodeDB->backupPreferences(meshtastic_AdminMessage_BackupLocation_FLASH));
+
+    strncpy(owner.long_name, "Changed Owner", sizeof(owner.long_name) - 1);
+    owner.long_name[sizeof(owner.long_name) - 1] = '\0';
+    strncpy(owner.short_name, "CHNG", sizeof(owner.short_name) - 1);
+    owner.short_name[sizeof(owner.short_name) - 1] = '\0';
+    owner.is_unmessagable = false;
+    config.security.public_key.size = 32;
+    memset(config.security.public_key.bytes, 0x7c, sizeof(config.security.public_key.bytes));
+    owner.public_key.size = 32;
+    memcpy(owner.public_key.bytes, config.security.public_key.bytes, sizeof(owner.public_key.bytes));
+    TypeConversions::CopyUserToNodeInfoLite(selfEntry, owner);
+    selfEntry->channel = 7;
+    nodeInfoLiteSetBit(selfEntry, NODEINFO_BITFIELD_IS_MUTED_MASK, true);
+
+    TEST_ASSERT_TRUE(
+        nodeDB->restorePreferences(meshtastic_AdminMessage_BackupLocation_FLASH, SEGMENT_CONFIG | SEGMENT_DEVICESTATE));
+    TEST_ASSERT_TRUE(devicestate.has_owner);
+    TEST_ASSERT_EQUAL_STRING("Backup Owner", owner.long_name);
+    TEST_ASSERT_EQUAL_STRING("BKUP", owner.short_name);
+    TEST_ASSERT_TRUE(owner.has_is_unmessagable);
+    TEST_ASSERT_TRUE(owner.is_unmessagable);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(backedUpOwner.public_key.bytes, owner.public_key.bytes, 32);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(backedUpOwner.public_key.bytes, config.security.public_key.bytes, 32);
+
+    selfEntry = nodeDB->getMeshNode(self);
+    TEST_ASSERT_NOT_NULL(selfEntry);
+    TEST_ASSERT_EQUAL_STRING("Backup Owner", selfEntry->long_name);
+    TEST_ASSERT_EQUAL_STRING("BKUP", selfEntry->short_name);
+    TEST_ASSERT_TRUE(nodeInfoLiteHasIsUnmessagable(selfEntry));
+    TEST_ASSERT_TRUE(nodeInfoLiteIsUnmessagable(selfEntry));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(backedUpOwner.public_key.bytes, selfEntry->public_key.bytes, 32);
+    TEST_ASSERT_EQUAL_UINT8(7, selfEntry->channel);
+    TEST_ASSERT_TRUE(nodeInfoLiteIsMuted(selfEntry));
+
+    config.security = originalSecurity;
+    owner = originalOwner;
+    *selfEntry = originalSelf;
+    TEST_ASSERT_TRUE(nodeDB->saveToDisk(SEGMENT_CONFIG | SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE));
+    FSCom.remove(backupFileName);
+}
+
 static meshtastic_Config makeLoraSetConfig(meshtastic_Config_LoRaConfig_RegionCode region, bool usePreset,
                                            meshtastic_Config_LoRaConfig_ModemPreset preset)
 {
@@ -2552,6 +2618,7 @@ void setup()
     RUN_TEST(test_handleSetConfig_persistsUnlicensedFirstRegionIdentity);
     RUN_TEST(test_bootDefense_sanitizesStaleLicensedChannelsOnce);
     RUN_TEST(test_restorePreferences_sanitizesLicensedBackupBeforeReturn);
+    RUN_TEST(test_restorePreferences_ownerIsVisibleThroughSelfNodeImmediately);
     RUN_TEST(test_getRegion_returnsCorrectRegion_US);
     RUN_TEST(test_getRegion_returnsCorrectRegion_EU868);
     RUN_TEST(test_getRegion_returnsCorrectRegion_LORA24);
