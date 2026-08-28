@@ -225,6 +225,12 @@ class MeshService
     /// Handle a packet that just arrived from the radio.  This method does _not_ free the provided packet.  If it
     /// needs to keep the packet around it makes a copy
     int handleFromRadio(const meshtastic_MeshPacket *p);
+    /// Pure helper behind MeshService::handleToRadio()'s pre-rekey-self rewrite. Given the
+    /// original local node number recorded at begin_edit_settings time, our current self, and
+    /// the destination on the phone-originated packet, returns the value to use: the rewritten
+    /// current self when the packet is addressed to the pre-rotation self, else the original
+    /// packetDest untouched.
+    static NodeNum canonicalizeLocalAdminDest(NodeNum origDest, NodeNum currentSelf, NodeNum packetDest);
     friend class RoutingModule;
 #ifdef PIO_UNIT_TESTING
     friend class MeshServicePhoneDeliveryTest;
