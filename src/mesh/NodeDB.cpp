@@ -4616,6 +4616,14 @@ bool NodeDB::backupPreferences(meshtastic_AdminMessage_BackupLocation location)
     return success;
 }
 
+static bool backupContainsRequestedSegments(const meshtastic_BackupPreferences &backup, int restoreWhat)
+{
+    return (!(restoreWhat & SEGMENT_CONFIG) || backup.has_config) &&
+           (!(restoreWhat & SEGMENT_MODULECONFIG) || backup.has_module_config) &&
+           (!(restoreWhat & SEGMENT_CHANNELS) || backup.has_channels) &&
+           (!(restoreWhat & SEGMENT_DEVICESTATE) || backup.has_owner);
+}
+
 bool NodeDB::restorePreferences(meshtastic_AdminMessage_BackupLocation location, int restoreWhat)
 {
     bool success = false;
@@ -4632,6 +4640,10 @@ bool NodeDB::restorePreferences(meshtastic_AdminMessage_BackupLocation location,
         meshtastic_BackupPreferences backup = meshtastic_BackupPreferences_init_zero;
         success = loadProto(backupFileName, meshtastic_BackupPreferences_size, sizeof(meshtastic_BackupPreferences),
                             &meshtastic_BackupPreferences_msg, &backup);
+        if (success && !backupContainsRequestedSegments(backup, restoreWhat)) {
+            LOG_ERROR("Restore backup incomplete");
+            return false;
+        }
         if (success) {
             meshtastic_NodeInfoLite *restoredSelf = nullptr;
             if (restoreWhat & SEGMENT_DEVICESTATE) {
