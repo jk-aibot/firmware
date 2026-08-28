@@ -2364,6 +2364,58 @@ static void test_toggleMutedNode_skipsRadioReload_butPersists()
     TEST_ASSERT_TRUE(nodeInfoLiteIsMuted(nodeDB->getMeshNode(TEST_NODE_NUM)));
 }
 
+// Test seam defined in AdminModule.cpp under PIO_UNIT_TESTING.
+extern uint32_t getDisableBluetoothCallCountForTest();
+extern void resetDisableBluetoothCallCountForTest();
+
+static meshtastic_ModuleConfig makeMqttModuleConfig()
+{
+    meshtastic_ModuleConfig config = meshtastic_ModuleConfig_init_zero;
+    config.which_payload_variant = meshtastic_ModuleConfig_mqtt_tag;
+    config.payload_variant.mqtt = meshtastic_ModuleConfig_MQTTConfig_init_zero;
+    return config;
+}
+
+static meshtastic_ModuleConfig makeSerialModuleConfig()
+{
+    meshtastic_ModuleConfig config = meshtastic_ModuleConfig_init_zero;
+    config.which_payload_variant = meshtastic_ModuleConfig_serial_tag;
+    config.payload_variant.serial = meshtastic_ModuleConfig_SerialConfig_init_zero;
+    return config;
+}
+
+static void test_mqttConfig_standaloneDisablesBluetooth()
+{
+    resetDisableBluetoothCallCountForTest();
+    TEST_ASSERT_TRUE(testAdmin->handleSetModuleConfig(makeMqttModuleConfig()));
+    TEST_ASSERT_EQUAL_UINT32(1, getDisableBluetoothCallCountForTest());
+}
+
+static void test_mqttConfig_transactionPreservesBluetooth()
+{
+    sendBeginEdit();
+    resetDisableBluetoothCallCountForTest();
+    TEST_ASSERT_TRUE(testAdmin->handleSetModuleConfig(makeMqttModuleConfig()));
+    TEST_ASSERT_EQUAL_UINT32(0, getDisableBluetoothCallCountForTest());
+    sendCommitEdit();
+}
+
+static void test_serialConfig_standaloneDisablesBluetooth()
+{
+    resetDisableBluetoothCallCountForTest();
+    TEST_ASSERT_TRUE(testAdmin->handleSetModuleConfig(makeSerialModuleConfig()));
+    TEST_ASSERT_EQUAL_UINT32(1, getDisableBluetoothCallCountForTest());
+}
+
+static void test_serialConfig_transactionPreservesBluetooth()
+{
+    sendBeginEdit();
+    resetDisableBluetoothCallCountForTest();
+    TEST_ASSERT_TRUE(testAdmin->handleSetModuleConfig(makeSerialModuleConfig()));
+    TEST_ASSERT_EQUAL_UINT32(0, getDisableBluetoothCallCountForTest());
+    sendCommitEdit();
+}
+
 // -----------------------------------------------------------------------
 // Node menu mute toggle (graphics::menuHandler::toggleNodeMuted)
 // -----------------------------------------------------------------------
@@ -2653,6 +2705,12 @@ void setup()
     RUN_TEST(test_handleSetConfig_fromOthers_lockedPresetFromNonTrioRegionRejected);
     RUN_TEST(test_handleSetConfig_presetChosenBeforeRegionSurvives);
     RUN_TEST(test_handleSetConfig_unsettingRegionKeepsPreset);
+
+    // Module-config transport gating (BLE preserved inside edit transactions)
+    RUN_TEST(test_mqttConfig_standaloneDisablesBluetooth);
+    RUN_TEST(test_mqttConfig_transactionPreservesBluetooth);
+    RUN_TEST(test_serialConfig_standaloneDisablesBluetooth);
+    RUN_TEST(test_serialConfig_transactionPreservesBluetooth);
 
     // Channel-configuration warning + coalescing
     RUN_TEST(test_warn_singleChannel_variantName_oneSpecificMessage);

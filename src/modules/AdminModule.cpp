@@ -2503,8 +2503,25 @@ void AdminModule::warnOnLoraPresetChange(const meshtastic_Config_LoRaConfig &old
     }
 } // warnOnLoraPresetChange
 
+#ifdef PIO_UNIT_TESTING
+static uint32_t disableBluetoothCallCountForTest = 0;
+
+uint32_t getDisableBluetoothCallCountForTest()
+{
+    return disableBluetoothCallCountForTest;
+}
+
+void resetDisableBluetoothCallCountForTest()
+{
+    disableBluetoothCallCountForTest = 0;
+}
+#endif
+
 void disableBluetooth()
 {
+#ifdef PIO_UNIT_TESTING
+    disableBluetoothCallCountForTest++;
+#endif
 #if HAS_BLUETOOTH
 #ifdef ARCH_ESP32
     if (nimbleBluetooth)
