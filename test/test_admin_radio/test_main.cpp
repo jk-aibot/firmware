@@ -1316,6 +1316,38 @@ static void test_bootDefense_sanitizesStaleLicensedChannelsOnce()
     TEST_ASSERT_FALSE_MESSAGE(channels.ensureLicensedOperation(), "boot sanitation must be idempotent");
 }
 
+static void test_restorePreferences_incompleteBackupDoesNotPartiallyMutateState()
+{
+    const auto originalConfig = config;
+    const meshtastic_User originalOwner = owner;
+    config.lora.hop_limit = 3;
+    strncpy(owner.long_name, "Current Owner", sizeof(owner.long_name) - 1);
+    owner.long_name[sizeof(owner.long_name) - 1] = '\0';
+
+    meshtastic_BackupPreferences incomplete = meshtastic_BackupPreferences_init_zero;
+    incomplete.version = DEVICESTATE_CUR_VER;
+    incomplete.has_config = true;
+    incomplete.config = config;
+    incomplete.config.lora.hop_limit = 7;
+    // Intentionally omit owner while asking restorePreferences() for DEVICESTATE.
+
+    size_t encodedSize = 0;
+    TEST_ASSERT_TRUE(pb_get_encoded_size(&encodedSize, meshtastic_BackupPreferences_fields, &incomplete));
+    // The direct saveProto() bypasses backupPreferences(), which is what normally mkdirs /backups;
+    // the per-suite sandbox starts without it and the atomic write needs the directory to exist.
+    FSCom.mkdir("/backups");
+    TEST_ASSERT_TRUE(nodeDB->saveProto(backupFileName, encodedSize, &meshtastic_BackupPreferences_msg, &incomplete));
+
+    TEST_ASSERT_FALSE(
+        nodeDB->restorePreferences(meshtastic_AdminMessage_BackupLocation_FLASH, SEGMENT_CONFIG | SEGMENT_DEVICESTATE));
+    TEST_ASSERT_EQUAL_UINT8(3, config.lora.hop_limit);
+    TEST_ASSERT_EQUAL_STRING("Current Owner", owner.long_name);
+
+    config = originalConfig;
+    owner = originalOwner;
+    FSCom.remove(backupFileName);
+}
+
 static void test_restorePreferences_sanitizesLicensedBackupBeforeReturn()
 {
     NodeDB *savedNodeDB = nodeDB;
@@ -2617,6 +2649,7 @@ void setup()
     RUN_TEST(test_handleSetConfig_persistsLicensedFirstRegionIdentity);
     RUN_TEST(test_handleSetConfig_persistsUnlicensedFirstRegionIdentity);
     RUN_TEST(test_bootDefense_sanitizesStaleLicensedChannelsOnce);
+    RUN_TEST(test_restorePreferences_incompleteBackupDoesNotPartiallyMutateState);
     RUN_TEST(test_restorePreferences_sanitizesLicensedBackupBeforeReturn);
     RUN_TEST(test_restorePreferences_ownerIsVisibleThroughSelfNodeImmediately);
     RUN_TEST(test_getRegion_returnsCorrectRegion_US);
