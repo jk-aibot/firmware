@@ -484,26 +484,27 @@ and cross-checked against the suites that actually ran. That derived count is th
 that should be trusted or quoted. Entries below carry per-suite descriptions the count cannot;
 do not infer completeness from the row count.
 
-| Suite                        | Module Under Test             |
-| ---------------------------- | ----------------------------- |
-| `test_admin_radio`           | Admin + LoRa region config    |
-| `test_fscommon_getfiles`     | Bounded file-manifest walk    |
-| `test_atak`                  | ATAK integration              |
-| `test_crypto`                | CryptoEngine                  |
-| `test_default`               | Default configuration helpers |
-| `test_hop_scaling`           | Hop scaling algorithm         |
-| `test_http_content_handler`  | HTTP handling                 |
-| `test_mac_from_string`       | MAC address parsing           |
-| `test_mesh_module`           | Module framework              |
-| `test_meshpacket_serializer` | Packet serialization          |
-| `test_mqtt`                  | MQTT integration              |
-| `test_packet_history`        | Packet history tracking       |
-| `test_position_precision`    | Position precision helpers    |
-| `test_radio`                 | Radio interface               |
-| `test_serial`                | Serial communication          |
-| `test_module_config`         | AdminModule module config     |
-| `test_tak_config`            | TAK (ATAK) team/role values   |
-| `test_traffic_management`    | Traffic management            |
-| `test_transmit_history`      | Retransmission tracking       |
-| `test_type_conversions`      | NodeDB v25 type conversions   |
-| `test_utf8`                  | UTF-8 utilities               |
+| Suite                           | Module Under Test               |
+| ------------------------------- | ------------------------------- |
+| `test_admin_radio`              | Admin + LoRa region config      |
+| `test_fscommon_getfiles`        | Bounded file-manifest walk      |
+| `test_atak`                     | ATAK integration                |
+| `test_crypto`                   | CryptoEngine                    |
+| `test_default`                  | Default configuration helpers   |
+| `test_ble_conn_param_scheduler` | BLE conn-param update scheduler |
+| `test_hop_scaling`              | Hop scaling algorithm           |
+| `test_http_content_handler`     | HTTP handling                   |
+| `test_mac_from_string`          | MAC address parsing             |
+| `test_mesh_module`              | Module framework                |
+| `test_meshpacket_serializer`    | Packet serialization            |
+| `test_mqtt`                     | MQTT integration                |
+| `test_packet_history`           | Packet history tracking         |
+| `test_position_precision`       | Position precision helpers      |
+| `test_radio`                    | Radio interface                 |
+| `test_serial`                   | Serial communication            |
+| `test_module_config`            | AdminModule module config       |
+| `test_tak_config`               | TAK (ATAK) team/role values     |
+| `test_traffic_management`       | Traffic management              |
+| `test_transmit_history`         | Retransmission tracking         |
+| `test_type_conversions`         | NodeDB v25 type conversions     |
+| `test_utf8`                     | UTF-8 utilities                 |
