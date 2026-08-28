@@ -479,11 +479,19 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
         LOG_INFO("Begin settings edit transaction");
         hasOpenEditTransaction = true;
         editTransactionActivityMs = millis();
+        // Capture the begin packet's addressed local destination, not whatever nodeDB->getNodeNum()
+        // currently returns. A PKI rotation can move the in-RAM node number before the session ends,
+        // and the phone session is bound to the address it saw at begin. Only a local begin
+        // (mp.from == 0) opens a transaction whose pre-rekey self the rewrite must later resolve to
+        // the live node - a remote PKC begin, even an accepted one, must not plant a local alias.
+        if (mp.from == 0)
+            editTransactionOriginalDest = mp.to;
         break;
     }
     case meshtastic_AdminMessage_commit_edit_settings_tag: {
         LOG_INFO("Commit settings edit transaction");
         hasOpenEditTransaction = false;
+        editTransactionOriginalDest = 0;
         deferredEditSegments = 0;
         saveChanges(SEGMENT_CONFIG | SEGMENT_MODULECONFIG | SEGMENT_DEVICESTATE | SEGMENT_CHANNELS | SEGMENT_NODEDATABASE);
         flushChannelWarnings(); // one coalesced message for everything edited in this transaction
@@ -1895,6 +1903,7 @@ void AdminModule::expireStaleEditTransaction()
 
     LOG_WARN("Edit transaction abandoned for %us; committing what it applied", EDIT_TRANSACTION_IDLE_MS / 1000);
     hasOpenEditTransaction = false;
+    editTransactionOriginalDest = 0;
     int segments = deferredEditSegments;
     deferredEditSegments = 0;
     // No reboot: the settings are already live in RAM and the client that would expect one is gone.
