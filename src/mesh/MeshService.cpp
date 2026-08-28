@@ -271,6 +271,15 @@ void MeshService::injectAsReceived(meshtastic_MeshPacket &p)
 }
 #endif
 
+// Rewrite a phone-originated admin packet's destination if the local edit session predates a PKI
+// rotation. Returns the new destination; the caller's packet should be updated with the result.
+NodeNum MeshService::canonicalizeLocalAdminDest(NodeNum origDest, NodeNum currentSelf, NodeNum packetDest)
+{
+    if (origDest != 0 && packetDest == origDest && packetDest != currentSelf)
+        return currentSelf;
+    return packetDest;
+}
+
 /**
  *  Given a ToRadio buffer parse it and properly handle it (setup radio, owner or send packet into the mesh)
  * Called by PhoneAPI.handleToRadio.  Note: p is a scratch buffer, this function is allowed to write to it but it can not keep a
@@ -316,10 +325,15 @@ void MeshService::handleToRadio(meshtastic_MeshPacket &p)
     // Note admin requests on their way out: AdminModule only accepts a response from a remote we
     // actually asked. Runs before encryption, while the payload is still readable.
     if (adminModule && p.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
-        p.decoded.portnum == meshtastic_PortNum_ADMIN_APP)
+        p.decoded.portnum == meshtastic_PortNum_ADMIN_APP) {
+        // Phone's open edit session may predate a PKI rotation that moved our in-RAM node number.
+        // Rewrite a decoded admin packet still addressed to the pre-rotation self so the request
+        // lands on us, not on a stale slot. Broadcasts, current-self, remotes, encrypted payloads
+        // and non-admin ports all miss the to/portnum guard and are left untouched.
+        p.to = canonicalizeLocalAdminDest(adminModule->getEditTransactionOriginalDest(), nodeDB->getNodeNum(), p.to);
         adminModule->noteOutgoingAdminRequest(p);
+    }
 #endif
-
     // Send the packet into the mesh
     DEBUG_HEAP_BEFORE;
     auto a = packetPool.allocCopy(p);
