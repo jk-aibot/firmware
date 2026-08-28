@@ -1275,8 +1275,7 @@ bool AdminModule::handleSetModuleConfig(const meshtastic_ModuleConfig &c)
         if (!MQTT::isValidConfig(c.payload_variant.mqtt)) {
             return false;
         }
-        // Disable Bluetooth to prevent interference during MQTT configuration, except inside an edit
-        // transaction: saveChanges() defers the reboot there, so nothing would bring BLE back.
+        // A transaction still needs this transport for the remaining writes and commit.
         if (!hasOpenEditTransaction)
             disableBluetooth();
         moduleConfig.has_mqtt = true;
@@ -1296,9 +1295,8 @@ bool AdminModule::handleSetModuleConfig(const meshtastic_ModuleConfig &c)
             LOG_ERROR("Invalid serial config");
             return false;
         }
-        // Same transaction caveat as MQTT above: a deferred reboot would leave BLE down with no restore.
         if (!hasOpenEditTransaction)
-            disableBluetooth(); // Disable Bluetooth to prevent interference during Serial configuration
+            disableBluetooth(); // Prevent interference during standalone Serial configuration.
         moduleConfig.has_serial = true;
         moduleConfig.serial = c.payload_variant.serial;
         break;
@@ -2503,8 +2501,25 @@ void AdminModule::warnOnLoraPresetChange(const meshtastic_Config_LoRaConfig &old
     }
 } // warnOnLoraPresetChange
 
+#ifdef PIO_UNIT_TESTING
+static uint32_t disableBluetoothCallCountForTest = 0;
+
+uint32_t getDisableBluetoothCallCountForTest()
+{
+    return disableBluetoothCallCountForTest;
+}
+
+void resetDisableBluetoothCallCountForTest()
+{
+    disableBluetoothCallCountForTest = 0;
+}
+#endif
+
 void disableBluetooth()
 {
+#ifdef PIO_UNIT_TESTING
+    disableBluetoothCallCountForTest++;
+#endif
 #if HAS_BLUETOOTH
 #ifdef ARCH_ESP32
     if (nimbleBluetooth)
