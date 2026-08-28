@@ -45,6 +45,11 @@ class AdminModule : public ProtobufModule<meshtastic_AdminMessage>, public Obser
     static constexpr uint32_t EDIT_TRANSACTION_IDLE_MS = 60 * 1000;
     uint32_t editTransactionActivityMs = 0; // millis() of the last save this transaction deferred
     int deferredEditSegments = 0;           // segments that transaction has touched but not yet saved
+    // Some admin paths (e.g. PKI rotation in handleSetConfig) move our in-RAM node number while
+    // a transaction is still open. The phone's session is bound to the node num it saw at begin;
+    // MeshService::handleToRadio remaps its admin writes back to the new self. Cleared on commit
+    // and on expireStaleEditTransaction() along with the rest of the transaction state.
+    NodeNum editTransactionOriginalDest = 0;
     /// Retire an open edit transaction whose client stopped talking, persisting what it applied.
     void expireStaleEditTransaction();
 #ifdef PIO_UNIT_TESTING
@@ -102,6 +107,11 @@ class AdminModule : public ProtobufModule<meshtastic_AdminMessage>, public Obser
     /// Note an admin request leaving this node for a remote, so that remote's response is
     /// accepted. Called from the client-to-mesh path (MeshService::handleToRadio).
     void noteOutgoingAdminRequest(const meshtastic_MeshPacket &p);
+
+    /// The local node number recorded when this device's most recent begin_edit_settings was
+    /// accepted, or 0 if no transaction is open. MeshService::handleToRadio() consults this
+    /// to remap a phone-originated admin packet that was addressed to the pre-rekey self.
+    NodeNum getEditTransactionOriginalDest() const { return editTransactionOriginalDest; }
 
   private:
     // An admin response has no session passkey and its sender need not hold an admin key, so a
