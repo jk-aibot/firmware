@@ -443,17 +443,36 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
     }
     case meshtastic_AdminMessage_factory_reset_config_tag: {
         LOG_INFO("Initiate factory config reset");
-        // Keep BLE active while reset cleanup performs nRF flash operations.
+#if defined(ARCH_ESP32)
+        // The reset path erases NVS, and NimBLE's bond store (ble_store_config, the
+        // "nimble_bond" namespace) lives there. Erasing NVS under a live NimBLE host
+        // invalidates state the stack still references, so the subsequent teardown
+        // panics on Core 0 in npl_freertos_eventq_remove (LoadProhibited) and the
+        // admin ACK is lost. Stop BLE before any destructive work; disableBluetooth()
+        // self-guards to a no-op on BLE-less builds.
+        disableBluetooth();
+#endif
+        // nRF52 keeps BLE active while reset cleanup performs its flash operations.
         nodeDB->factoryReset();
         LOG_INFO("Factory config reset finished, rebooting soon");
+#if !defined(ARCH_ESP32)
         disableBluetooth();
+#endif
         reboot(DEFAULT_REBOOT_SECONDS);
         break;
     }
     case meshtastic_AdminMessage_factory_reset_device_tag: {
         LOG_INFO("Initiate full factory reset");
-        nodeDB->factoryReset(true);
+#if defined(ARCH_ESP32)
+        // Same ordering constraint as the config reset above: factoryReset(true) runs
+        // nvs_flash_erase() (bonds, ssl keys, persistent vars), which must not overlap
+        // the NimBLE stack or its teardown.
         disableBluetooth();
+#endif
+        nodeDB->factoryReset(true);
+#if !defined(ARCH_ESP32)
+        disableBluetooth();
+#endif
         reboot(DEFAULT_REBOOT_SECONDS);
         break;
     }
