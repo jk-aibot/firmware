@@ -130,8 +130,16 @@ int SystemCommandsModule::handleInputEvent(const InputEvent *event)
     // factory reset
     case INPUT_BROKER_FACTORY_RST:
         LOG_INFO("Initiate full factory reset");
-        nodeDB->factoryReset(true);
+#if defined(ARCH_ESP32)
+        // Stop NimBLE before factoryReset(true) erases NVS; erasing under a live host
+        // wedges the BLE teardown (panic in npl_freertos_eventq_remove). See the admin
+        // factory reset handlers in AdminModule.cpp.
         disableBluetooth();
+#endif
+        nodeDB->factoryReset(true);
+#if !defined(ARCH_ESP32)
+        disableBluetooth();
+#endif
         // reboot(DEFAULT_REBOOT_SECONDS);
         LOG_INFO("Reboot in %d seconds", DEFAULT_REBOOT_SECONDS);
         if (screen)
