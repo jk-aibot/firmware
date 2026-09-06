@@ -51,6 +51,8 @@ class AdminModule : public ProtobufModule<meshtastic_AdminMessage>, public Obser
 #ifdef PIO_UNIT_TESTING
     int lastSaveWhatForTest = 0;
 #endif
+    // Local destination seen at transaction begin; used to resolve phone writes after rekey.
+    NodeNum editTransactionOriginalDest = 0;
 
     uint8_t session_passkey[8] = {0};
     uint32_t session_time = 0;        // millis() when the current session passkey was issued
@@ -103,6 +105,9 @@ class AdminModule : public ProtobufModule<meshtastic_AdminMessage>, public Obser
     /// Note an admin request leaving this node for a remote, so that remote's response is
     /// accepted. Called from the client-to-mesh path (MeshService::handleToRadio).
     void noteOutgoingAdminRequest(const meshtastic_MeshPacket &p);
+
+    /// Local destination recorded at begin_edit_settings, or 0 when no alias is active.
+    NodeNum getEditTransactionOriginalDest() const { return editTransactionOriginalDest; }
 
   private:
     // An admin response has no session passkey and its sender need not hold an admin key, so a
