@@ -26,8 +26,10 @@ class AdminModuleTestShim : public AdminModule
     {
         hasOpenEditTransaction = true;
         editTransactionActivityMs = millis();
+        deferredEditReboot = false;
     }
     int savedSegments() const { return lastSaveWhatForTest; }
+    bool editTransactionNeedsReboot() const { return deferredEditReboot; }
 
     bool editTransactionOpen() const { return hasOpenEditTransaction; }
     // Backdate past the idle window so a test sees an abandoned transaction without waiting it out.
