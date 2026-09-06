@@ -2,6 +2,9 @@
 #include "UptimeClock.h"
 #include <Arduino.h>
 #include <atomic>
+#ifdef ARCH_ESP32
+#include "esp_timer.h"
+#endif
 
 uint32_t Time::getMillis()
 {
@@ -26,11 +29,52 @@ std::atomic<uint32_t> publishedGeneration{0};
 std::atomic<Time::MonotonicPublishHook> monotonicPublishHook{nullptr};
 #endif
 
-// Extend a published (high, low) snapshot to `now`; unsigned subtraction is exact across the wrap
-// for any gap under 49.7 days. One copy, because reader and writer must agree on it exactly.
-uint64_t extendPublished(uint32_t high, uint32_t low, uint32_t now)
+// ESP32 uses its native 64-bit timer; other platforms retain the 32-bit
+// getMillis() sample and wrap-carry composition.
+uint64_t monotonicSampleMs()
 {
-    return ((((uint64_t)high << 32) | low) + (uint32_t)(now - low));
+#ifdef PIO_UNIT_TESTING
+    if (Time::useTestNative64.load(std::memory_order_relaxed))
+        return Time::testNowMs64.load(std::memory_order_relaxed);
+    if (Time::useTestClock.load(std::memory_order_relaxed))
+        return Time::testNowMs.load(std::memory_order_relaxed);
+#endif
+#if defined(ARCH_ESP32)
+    return (uint64_t)esp_timer_get_time() / 1000;
+#else
+    return Time::getMillis();
+#endif
+}
+
+#if defined(ARCH_ESP32) || defined(PIO_UNIT_TESTING)
+// Native 64-bit samples are absolute, but a pure read can observe a forward sample before
+// serviceMonotonic() publishes it; this shared high-water stops later lower samples retreating it.
+std::atomic<uint64_t> native64HighWater{0};
+
+uint64_t extendNative64(uint64_t candidate)
+{
+    uint64_t prev = native64HighWater.load(std::memory_order_relaxed);
+    while (prev < candidate && !native64HighWater.compare_exchange_weak(prev, candidate, std::memory_order_relaxed))
+        ;
+    return prev >= candidate ? prev : candidate;
+}
+#endif
+
+// Absolute samples never retreat; 32-bit samples extend the published low word
+// with unsigned wrap-correct elapsed time.
+uint64_t extendPublished(uint64_t base, uint64_t now)
+{
+#ifdef PIO_UNIT_TESTING
+    if (Time::useTestNative64.load(std::memory_order_relaxed))
+        return extendNative64(now > base ? now : base);
+    if (Time::useTestClock.load(std::memory_order_relaxed))
+        return base + (uint32_t)((uint32_t)now - (uint32_t)base);
+#endif
+#if defined(ARCH_ESP32)
+    return extendNative64(now > base ? now : base);
+#else
+    return base + (uint32_t)((uint32_t)now - (uint32_t)base);
+#endif
 }
 
 // A generation change means the writer completed a publish while this copy was being read. A
@@ -53,8 +97,9 @@ uint64_t Time::getMillisMonotonic()
 {
     uint32_t high, low;
     readPublished(high, low);
-    // The reader writes nothing back; it just extends the last published carry to now.
-    return extendPublished(high, low, getMillis());
+    // The reader only advances the native-64 high-water; otherwise it composes the last
+    // published snapshot with now.
+    return extendPublished(((uint64_t)high << 32) | low, monotonicSampleMs());
 }
 
 uint32_t Time::getUptimeSecs()
@@ -68,7 +113,7 @@ void Time::serviceMonotonic()
     PublishedSnapshot &active = published[generation & 1u];
     const uint32_t low = active.low.load(std::memory_order_relaxed);
     const uint32_t high = active.high.load(std::memory_order_relaxed);
-    const uint64_t next = extendPublished(high, low, getMillis());
+    const uint64_t next = extendPublished(((uint64_t)high << 32) | low, monotonicSampleMs());
 
     PublishedSnapshot &inactive = published[(generation + 1u) & 1u];
     inactive.high.store((uint32_t)(next >> 32), std::memory_order_relaxed);
@@ -89,6 +134,9 @@ void Time::resetMonotonicForTests()
         snapshot.low.store(0, std::memory_order_relaxed);
     }
     monotonicPublishHook.store(nullptr, std::memory_order_relaxed);
+    Time::useTestNative64.store(false, std::memory_order_relaxed);
+    Time::testNowMs64.store(0, std::memory_order_relaxed);
+    native64HighWater.store(0, std::memory_order_relaxed);
 }
 
 void Time::setMonotonicPublishHookForTests(MonotonicPublishHook hook)
