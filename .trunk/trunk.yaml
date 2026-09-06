@@ -179,10 +179,11 @@ lint:
     # (0xFFFFFF00u and neighbors). trufflehog's Lob detector stitches nearby
     # hex literals into one candidate string and the result happens to match
     # a Lob API key shape. Not secrets - deterministic test fixtures for the
-    # 32-bit rollover. test_ack_proof trips the same detector on its node
-    # numbers and request ids (0x0A0A0A0A, 0x0B0B0B0B, 0xABCD1234); its key
-    # material is generated at runtime by crypto->generateKeyPair, so there is
-    # no literal key in the file to leak.
+    # 32-bit rollover. The edit-transaction destination-alias suite uses node
+    # numbers like 0xE1E2E3E4. test_ack_proof trips the same detector on its
+    # node numbers and request ids (0x0A0A0A0A, 0x0B0B0B0B, 0xABCD1234); its
+    # key material is generated at runtime by crypto->generateKeyPair, so
+    # there is no literal key in the file to leak.
     #
     # test_nodedb_blocked trips it on an identifier rather than on hex: one of
     # its removeNodeByNum cases has a name exactly 35 characters long after the
@@ -196,6 +197,7 @@ lint:
         - test/test_nodedb_blocked/test_main.cpp
         - test/test_throttle/test_main.cpp
         - test/test_uptime_clock/test_main.cpp
+        - test/test_edit_txn_dest_alias/test_main.cpp
     # The nightly index templates are halves of one page, not whole documents:
     # hintro.html stops mid-<div> and houtro.html starts with closing tags, so
     # that `tree --hintro/--houtro` can splice the file listing between them.
