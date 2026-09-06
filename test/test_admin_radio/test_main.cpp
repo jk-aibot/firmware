@@ -23,6 +23,7 @@
 #include "mesh/Channels.h"
 #include "mesh/CryptoEngine.h" // crypto global: the tests swap in a stub engine to drive key derivation
 #include "mesh/Router.h"       // router global: allocErrorResponse() allocates the reply through it
+#include "mesh/TypeConversions.h"
 #include "modules/AdminModule.h"
 #include "modules/NodeInfoModule.h"
 #include <ErriezCRC32.h> // crc32Buffer(), for the my_node_num == crc32(public_key) invariant
@@ -1337,6 +1338,192 @@ static void test_restorePreferences_sanitizesLicensedBackupBeforeReturn()
     nodeDB = savedNodeDB;
 }
 
+static void test_restorePreferences_ownerIsVisibleThroughSelfNodeImmediately()
+{
+    const uint32_t self = nodeDB->getNodeNum();
+    const meshtastic_User originalOwner = owner;
+    const auto originalSecurity = config.security;
+    meshtastic_NodeInfoLite *selfEntry = nodeDB->getMeshNode(self);
+    TEST_ASSERT_NOT_NULL(selfEntry);
+    const meshtastic_NodeInfoLite originalSelf = *selfEntry;
+
+    meshtastic_User backedUpOwner = owner;
+    strncpy(backedUpOwner.long_name, "Backup Owner", sizeof(backedUpOwner.long_name) - 1);
+    backedUpOwner.long_name[sizeof(backedUpOwner.long_name) - 1] = '\0';
+    strncpy(backedUpOwner.short_name, "BKUP", sizeof(backedUpOwner.short_name) - 1);
+    backedUpOwner.short_name[sizeof(backedUpOwner.short_name) - 1] = '\0';
+    backedUpOwner.has_is_unmessagable = true;
+    backedUpOwner.is_unmessagable = true;
+    config.security.public_key.size = 32;
+    memset(config.security.public_key.bytes, 0x3a, sizeof(config.security.public_key.bytes));
+    backedUpOwner.public_key.size = 32;
+    memcpy(backedUpOwner.public_key.bytes, config.security.public_key.bytes, sizeof(backedUpOwner.public_key.bytes));
+    owner = backedUpOwner;
+    TypeConversions::CopyUserToNodeInfoLite(selfEntry, owner);
+    TEST_ASSERT_TRUE(nodeDB->backupPreferences(meshtastic_AdminMessage_BackupLocation_FLASH));
+
+    strncpy(owner.long_name, "Changed Owner", sizeof(owner.long_name) - 1);
+    owner.long_name[sizeof(owner.long_name) - 1] = '\0';
+    strncpy(owner.short_name, "CHNG", sizeof(owner.short_name) - 1);
+    owner.short_name[sizeof(owner.short_name) - 1] = '\0';
+    owner.is_unmessagable = false;
+    owner.public_key.size = 32;
+    memset(owner.public_key.bytes, 0x7c, sizeof(owner.public_key.bytes));
+    TypeConversions::CopyUserToNodeInfoLite(selfEntry, owner);
+    selfEntry->channel = 7;
+    nodeInfoLiteSetBit(selfEntry, NODEINFO_BITFIELD_IS_MUTED_MASK, true);
+
+    TEST_ASSERT_TRUE(nodeDB->restorePreferences(meshtastic_AdminMessage_BackupLocation_FLASH, SEGMENT_DEVICESTATE));
+    TEST_ASSERT_TRUE(devicestate.has_owner);
+    TEST_ASSERT_EQUAL_STRING("Backup Owner", owner.long_name);
+    TEST_ASSERT_EQUAL_STRING("BKUP", owner.short_name);
+    TEST_ASSERT_TRUE(owner.has_is_unmessagable);
+    TEST_ASSERT_TRUE(owner.is_unmessagable);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(backedUpOwner.public_key.bytes, owner.public_key.bytes, 32);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(backedUpOwner.public_key.bytes, config.security.public_key.bytes, 32);
+
+    selfEntry = nodeDB->getMeshNode(self);
+    TEST_ASSERT_NOT_NULL(selfEntry);
+    TEST_ASSERT_EQUAL_STRING("Backup Owner", selfEntry->long_name);
+    TEST_ASSERT_EQUAL_STRING("BKUP", selfEntry->short_name);
+    TEST_ASSERT_TRUE(nodeInfoLiteHasIsUnmessagable(selfEntry));
+    TEST_ASSERT_TRUE(nodeInfoLiteIsUnmessagable(selfEntry));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(backedUpOwner.public_key.bytes, selfEntry->public_key.bytes, 32);
+    TEST_ASSERT_EQUAL_UINT8(7, selfEntry->channel);
+    TEST_ASSERT_TRUE(nodeInfoLiteIsMuted(selfEntry));
+
+    config.security = originalSecurity;
+    owner = originalOwner;
+    *selfEntry = originalSelf;
+    TEST_ASSERT_TRUE(nodeDB->saveToDisk(SEGMENT_CONFIG | SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE));
+    FSCom.remove(backupFileName);
+}
+
+static void test_restorePreferences_configAndOwnerMigratesIdentity()
+{
+    const NodeNum oldSelf = nodeDB->getNodeNum();
+    const auto originalSecurity = config.security;
+    const meshtastic_User originalOwner = owner;
+    meshtastic_NodeInfoLite *oldEntry = nodeDB->getMeshNode(oldSelf);
+    TEST_ASSERT_NOT_NULL(oldEntry);
+    const meshtastic_NodeInfoLite originalSelf = *oldEntry;
+
+    config.security.public_key.size = 32;
+    memset(config.security.public_key.bytes, 0x6d, sizeof(config.security.public_key.bytes));
+    NodeNum restoredSelfNum = crc32Buffer(config.security.public_key.bytes, config.security.public_key.size);
+    if (restoredSelfNum == oldSelf) {
+        config.security.public_key.bytes[31] ^= 0x01;
+        restoredSelfNum = crc32Buffer(config.security.public_key.bytes, config.security.public_key.size);
+    }
+    TEST_ASSERT_NOT_EQUAL(oldSelf, restoredSelfNum);
+
+    owner = meshtastic_User_init_zero;
+    strncpy(owner.long_name, "Migrated Backup", sizeof(owner.long_name) - 1);
+    strncpy(owner.short_name, "MIG", sizeof(owner.short_name) - 1);
+    owner.public_key.size = config.security.public_key.size;
+    memcpy(owner.public_key.bytes, config.security.public_key.bytes, owner.public_key.size);
+    TypeConversions::CopyUserToNodeInfoLite(oldEntry, owner);
+    TEST_ASSERT_TRUE(nodeDB->backupPreferences(meshtastic_AdminMessage_BackupLocation_FLASH));
+
+    // Return the running device to its pre-backup identity. The restore must apply backup.config
+    // before deriving the new node number; otherwise this regression would silently test the wrong order.
+    config.security = originalSecurity;
+    owner = originalOwner;
+    *oldEntry = originalSelf;
+    TEST_ASSERT_EQUAL_UINT32(oldSelf, nodeDB->getNodeNum());
+
+    TEST_ASSERT_TRUE(
+        nodeDB->restorePreferences(meshtastic_AdminMessage_BackupLocation_FLASH, SEGMENT_CONFIG | SEGMENT_DEVICESTATE));
+    TEST_ASSERT_EQUAL_UINT32(restoredSelfNum, nodeDB->getNodeNum());
+    TEST_ASSERT_NULL(nodeDB->getMeshNode(oldSelf));
+
+    meshtastic_NodeInfoLite *restoredEntry = nodeDB->getMeshNode(restoredSelfNum);
+    TEST_ASSERT_NOT_NULL(restoredEntry);
+    TEST_ASSERT_EQUAL_PTR(restoredEntry, nodeDB->getMeshNodeByIndex(0));
+    TEST_ASSERT_EQUAL_STRING("Migrated Backup", restoredEntry->long_name);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(config.security.public_key.bytes, restoredEntry->public_key.bytes, 32);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(config.security.public_key.bytes, owner.public_key.bytes, 32);
+
+    FSCom.remove(backupFileName);
+}
+
+static void test_restorePreferences_keylessOwnerKeepsActiveSelfKey()
+{
+    const uint32_t self = nodeDB->getNodeNum();
+    const meshtastic_User originalOwner = owner;
+    const auto originalSecurity = config.security;
+    meshtastic_NodeInfoLite *selfEntry = nodeDB->getMeshNode(self);
+    TEST_ASSERT_NOT_NULL(selfEntry);
+    const meshtastic_NodeInfoLite originalSelf = *selfEntry;
+
+    config.security.public_key.size = 32;
+    memset(config.security.public_key.bytes, 0x5d, 32);
+    const auto activeKey = config.security.public_key;
+
+    owner = meshtastic_User_init_zero;
+    strncpy(owner.long_name, "Keyless Backup", sizeof(owner.long_name) - 1);
+    strncpy(owner.short_name, "KLS", sizeof(owner.short_name) - 1);
+    owner.public_key.size = 0;
+    TypeConversions::CopyUserToNodeInfoLite(selfEntry, owner);
+    TEST_ASSERT_TRUE(nodeDB->backupPreferences(meshtastic_AdminMessage_BackupLocation_FLASH));
+
+    strncpy(owner.long_name, "Current Owner", sizeof(owner.long_name) - 1);
+    owner.public_key.size = activeKey.size;
+    memcpy(owner.public_key.bytes, activeKey.bytes, activeKey.size);
+    TypeConversions::CopyUserToNodeInfoLite(selfEntry, owner);
+
+    TEST_ASSERT_TRUE(nodeDB->restorePreferences(meshtastic_AdminMessage_BackupLocation_FLASH, SEGMENT_DEVICESTATE));
+    TEST_ASSERT_EQUAL_STRING("Keyless Backup", owner.long_name);
+    TEST_ASSERT_EQUAL_UINT(32, owner.public_key.size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(activeKey.bytes, owner.public_key.bytes, 32);
+
+    selfEntry = nodeDB->getMeshNode(self);
+    TEST_ASSERT_NOT_NULL(selfEntry);
+    TEST_ASSERT_EQUAL_UINT(32, selfEntry->public_key.size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(activeKey.bytes, selfEntry->public_key.bytes, 32);
+
+    config.security = originalSecurity;
+    owner = originalOwner;
+    *selfEntry = originalSelf;
+    TEST_ASSERT_TRUE(nodeDB->saveToDisk(SEGMENT_CONFIG | SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE));
+    FSCom.remove(backupFileName);
+}
+
+// A non-empty backup owner key shorter than a real Curve25519 key cannot back PKI, so restore
+// refuses it even when the truncated bytes match the configured key, leaving the live identity alone.
+static void test_restorePreferences_rejectsTruncatedMatchingOwnerKey()
+{
+    const meshtastic_User originalOwner = owner;
+    const auto originalSecurity = config.security;
+    meshtastic_NodeInfoLite *selfEntry = nodeDB->getMeshNode(nodeDB->getNodeNum());
+    TEST_ASSERT_NOT_NULL(selfEntry);
+    const meshtastic_NodeInfoLite originalSelf = *selfEntry;
+
+    config.security.public_key.size = 16;
+    memset(config.security.public_key.bytes, 0x3c, 16);
+
+    owner = meshtastic_User_init_zero;
+    strncpy(owner.long_name, "Truncated Backup", sizeof(owner.long_name) - 1);
+    strncpy(owner.short_name, "TBK", sizeof(owner.short_name) - 1);
+    owner.public_key.size = 16;
+    memcpy(owner.public_key.bytes, config.security.public_key.bytes, 16);
+    TEST_ASSERT_TRUE(nodeDB->backupPreferences(meshtastic_AdminMessage_BackupLocation_FLASH));
+
+    owner.public_key.size = 32;
+    memset(owner.public_key.bytes, 0x77, 32);
+    TypeConversions::CopyUserToNodeInfoLite(selfEntry, owner);
+
+    TEST_ASSERT_FALSE(nodeDB->restorePreferences(meshtastic_AdminMessage_BackupLocation_FLASH, SEGMENT_DEVICESTATE));
+    TEST_ASSERT_EQUAL_UINT(32, owner.public_key.size);
+    TEST_ASSERT_EQUAL_UINT8(0x77, owner.public_key.bytes[0]);
+
+    config.security = originalSecurity;
+    owner = originalOwner;
+    *selfEntry = originalSelf;
+    TEST_ASSERT_TRUE(nodeDB->saveToDisk(SEGMENT_CONFIG | SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE));
+    FSCom.remove(backupFileName);
+}
+
 static meshtastic_Config makeLoraSetConfig(meshtastic_Config_LoRaConfig_RegionCode region, bool usePreset,
                                            meshtastic_Config_LoRaConfig_ModemPreset preset)
 {
@@ -2550,6 +2737,10 @@ void setup()
     RUN_TEST(test_handleSetConfig_persistsUnlicensedFirstRegionIdentity);
     RUN_TEST(test_bootDefense_sanitizesStaleLicensedChannelsOnce);
     RUN_TEST(test_restorePreferences_sanitizesLicensedBackupBeforeReturn);
+    RUN_TEST(test_restorePreferences_ownerIsVisibleThroughSelfNodeImmediately);
+    RUN_TEST(test_restorePreferences_configAndOwnerMigratesIdentity);
+    RUN_TEST(test_restorePreferences_keylessOwnerKeepsActiveSelfKey);
+    RUN_TEST(test_restorePreferences_rejectsTruncatedMatchingOwnerKey);
     RUN_TEST(test_getRegion_returnsCorrectRegion_US);
     RUN_TEST(test_getRegion_returnsCorrectRegion_EU868);
     RUN_TEST(test_getRegion_returnsCorrectRegion_LORA24);
