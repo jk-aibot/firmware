@@ -4901,6 +4901,27 @@ bool NodeDB::restorePreferences(meshtastic_AdminMessage_BackupLocation location,
         success = loadProto(backupFileName, meshtastic_BackupPreferences_size, sizeof(meshtastic_BackupPreferences),
                             &meshtastic_BackupPreferences_msg, &backup);
         if (success) {
+            meshtastic_NodeInfoLite *restoredSelf = nullptr;
+            if (restoreWhat & SEGMENT_DEVICESTATE) {
+                const auto &restoredSecurity = (restoreWhat & SEGMENT_CONFIG) ? backup.config.security : config.security;
+                // An empty owner key makes no identity claim (licensed/Ham mode or a pre-keygen
+                // backup); a non-empty one must be a full Curve25519 key matching this device's config.
+                const bool keyMatchesConfig = backup.owner.public_key.size == 0 ||
+                                              (backup.owner.public_key.size == sizeof(backup.owner.public_key.bytes) &&
+                                               restoredSecurity.public_key.size == sizeof(restoredSecurity.public_key.bytes) &&
+                                               memcmp(backup.owner.public_key.bytes, restoredSecurity.public_key.bytes,
+                                                      sizeof(backup.owner.public_key.bytes)) == 0);
+                if (!keyMatchesConfig) {
+                    LOG_ERROR("Restore owner key mismatch");
+                    return false;
+                }
+                restoredSelf = getOrCreateMeshNode(getNodeNum());
+                if (!restoredSelf) {
+                    LOG_ERROR("Restore prefs from backup failed");
+                    return false;
+                }
+            }
+
             if (restoreWhat & SEGMENT_CONFIG) {
                 config = backup.config;
                 LOG_DEBUG("Restored config");
@@ -4909,9 +4930,20 @@ bool NodeDB::restorePreferences(meshtastic_AdminMessage_BackupLocation location,
                 moduleConfig = backup.module_config;
                 LOG_DEBUG("Restored module config");
             }
+            bool ownerRestored = false;
             if (restoreWhat & SEGMENT_DEVICESTATE) {
                 devicestate.owner = backup.owner;
-                LOG_DEBUG("Restored device state");
+                devicestate.has_owner = true;
+                ownerRestored = true;
+                LOG_INFO("Restored device state");
+            }
+            if (ownerRestored && (restoreWhat & SEGMENT_CONFIG) &&
+                config.security.public_key.size == sizeof(config.security.public_key.bytes) && createNewIdentity()) {
+                restoredSelf = getMeshNode(getNodeNum());
+                if (!restoredSelf) {
+                    LOG_ERROR("Restored identity has no self node");
+                    return false;
+                }
             }
             if (restoreWhat & SEGMENT_CHANNELS) {
                 channelFile = backup.channels;
@@ -4928,6 +4960,16 @@ bool NodeDB::restorePreferences(meshtastic_AdminMessage_BackupLocation location,
             // Restore reboots without going through MeshService::reloadConfig(), which is where the
             // committed slot is otherwise re-read.
             refreshCommittedLoraSlot();
+            if (ownerRestored) {
+                if (owner.public_key.size == 0 && config.security.public_key.size == sizeof(owner.public_key.bytes)) {
+                    owner.public_key.size = config.security.public_key.size;
+                    memcpy(owner.public_key.bytes, config.security.public_key.bytes, owner.public_key.size);
+                }
+                TypeConversions::CopyUserToNodeInfoLite(restoredSelf, owner);
+                updateGUIforNode = restoredSelf;
+                notifyObservers(true);
+                restoreWhat |= SEGMENT_NODEDATABASE;
+            }
 
             success = saveToDisk(restoreWhat);
             if (success) {
