@@ -241,6 +241,11 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
     }
     // Before the switch, so every case below sees consistent transaction state.
     expireStaleEditTransaction();
+    if (r->which_payload_variant == meshtastic_AdminMessage_begin_edit_settings_tag && mp.from == 0 &&
+        editTransactionOriginalDest == 0)
+        editTransactionOriginalDest = mp.to;
+    else if (r->which_payload_variant == meshtastic_AdminMessage_commit_edit_settings_tag)
+        editTransactionOriginalDest = 0;
 
     switch (r->which_payload_variant) {
 
@@ -1901,6 +1906,7 @@ void AdminModule::expireStaleEditTransaction()
     if (!hasOpenEditTransaction || Throttle::isWithinTimespanMs(editTransactionActivityMs, EDIT_TRANSACTION_IDLE_MS))
         return;
 
+    editTransactionOriginalDest = 0;
     LOG_WARN("Edit transaction abandoned for %us; committing what it applied", EDIT_TRANSACTION_IDLE_MS / 1000);
     hasOpenEditTransaction = false;
     const int segments = deferredEditSegments;
