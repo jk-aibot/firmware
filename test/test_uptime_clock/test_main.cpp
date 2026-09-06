@@ -245,6 +245,86 @@ void test_getUptimeSecs_stays_exact_across_the_wrap()
     TEST_ASSERT_EQUAL_UINT32(4294968u, Time::getUptimeSecs());
 }
 
+// --- native 64-bit sample domain (ESP32 ships this; armed here via setTestMonotonicMs64) ---
+
+// A backward absolute sample must hold the published baseline instead of
+// manufacturing a 2^32 ms wrap, then recover when the sample advances.
+void test_native64_backward_sample_does_not_amplify_nor_retreat()
+{
+    Time::setTestMonotonicMs64(110000); // ~110s of uptime when the anomaly hit
+    Time::serviceMonotonic();
+    TEST_ASSERT_EQUAL_UINT64(110000, Time::getMillisMonotonic());
+
+    Time::setTestMonotonicMs64(100000); // raw sample 10s below the published baseline
+    Time::serviceMonotonic();
+    Time::serviceMonotonic();
+    TEST_ASSERT_EQUAL_UINT64(110000, Time::getMillisMonotonic()); // held, not 2^32 + 100000
+
+    Time::setTestMonotonicMs64(100500); // a pure reader while the raw sample is still behind
+    TEST_ASSERT_EQUAL_UINT64(110000, Time::getMillisMonotonic());
+
+    Time::setTestMonotonicMs64(111000); // recovery: publication follows the raw clock again
+    Time::serviceMonotonic();
+    TEST_ASSERT_EQUAL_UINT64(111000, Time::getMillisMonotonic());
+}
+
+void test_native64_reads_and_publication_stay_nondecreasing()
+{
+    Time::setTestMonotonicMs64(1000);
+    Time::serviceMonotonic();
+
+    const uint64_t schedule[] = {2000, 1500, 1500, 5000, 4999, 5000};
+    uint64_t previous = 0;
+    for (const uint64_t sample : schedule) {
+        Time::setTestMonotonicMs64(sample);
+        Time::serviceMonotonic();
+        const uint64_t now = Time::getMillisMonotonic();
+        TEST_ASSERT_TRUE(now >= previous);
+        previous = now;
+    }
+    TEST_ASSERT_EQUAL_UINT64(5000, previous); // dips held, forward steps published
+}
+
+// The genuine 32-bit crossing is an ordinary forward step in the absolute domain: the count
+// continues past 2^32 exactly, with no carry inferred from the truncated low word.
+void test_native64_crosses_the_32bit_boundary_exactly()
+{
+    Time::setTestMonotonicMs64(0xFFFFFFFFull);
+    Time::serviceMonotonic();
+    TEST_ASSERT_EQUAL_UINT64(0xFFFFFFFFull, Time::getMillisMonotonic());
+
+    Time::setTestMonotonicMs64(0x100000100ull); // +0x200 forward, low word back to 0x100
+    Time::serviceMonotonic();
+    TEST_ASSERT_EQUAL_UINT64(0x100000100ull, Time::getMillisMonotonic());
+}
+
+void test_native64_injection_drives_pure_reads_and_useRealClock_disarms()
+{
+    Time::setTestMonotonicMs64(0x100000000ull);
+    Time::serviceMonotonic();
+    TEST_ASSERT_EQUAL_UINT64(0x100000000ull, Time::getMillisMonotonic());
+
+    Time::setTestMonotonicMs64(0x100000005ull);
+    TEST_ASSERT_EQUAL_UINT64(0x100000005ull, Time::getMillisMonotonic()); // pure read, no publish
+
+    Time::setTestMonotonicMs64(0xFFFFFFFFull);                            // below the forward sample the pure read just returned
+    TEST_ASSERT_EQUAL_UINT64(0x100000005ull, Time::getMillisMonotonic()); // high-water holds, no retreat
+    Time::serviceMonotonic();                                             // publication catches up to the same high-water floor
+    TEST_ASSERT_EQUAL_UINT64(0x100000005ull, Time::getMillisMonotonic());
+
+    Time::resetMonotonicForTests(); // clears the high-water: a fresh absolute sample starts unclamped
+    Time::setTestMonotonicMs64(0x10ull);
+    TEST_ASSERT_EQUAL_UINT64(0x10ull, Time::getMillisMonotonic());
+
+    Time::useRealClock(); // disarm: the platform's own carry domain answers again
+    TEST_ASSERT_FALSE(Time::useTestNative64.load(std::memory_order_relaxed));
+    Time::resetMonotonicForTests();
+    Time::setTestMillis(0xFFFFFF00u);
+    Time::serviceMonotonic();
+    Time::advanceTestMillis(0x200u);
+    TEST_ASSERT_EQUAL_UINT64(0x100000100ull, Time::getMillisMonotonic());
+}
+
 // --- concurrent readers ---
 
 // Readers run flat out while the clock is stepped across several wraps. Under the old accessor two
@@ -448,6 +528,10 @@ void setup()
     RUN_TEST(test_getTime_stays_exact_across_the_wrap);
     RUN_TEST(test_getTime_anchored_after_a_wrap_is_exact);
     RUN_TEST(test_getTime_unaffected_by_concurrent_readers_across_the_wrap);
+    RUN_TEST(test_native64_backward_sample_does_not_amplify_nor_retreat);
+    RUN_TEST(test_native64_reads_and_publication_stay_nondecreasing);
+    RUN_TEST(test_native64_crosses_the_32bit_boundary_exactly);
+    RUN_TEST(test_native64_injection_drives_pure_reads_and_useRealClock_disarms);
     RUN_TEST(test_real_clock_advances_when_not_injected);
     exit(UNITY_END());
 }
