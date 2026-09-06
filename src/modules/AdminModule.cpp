@@ -482,9 +482,12 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
     }
     case meshtastic_AdminMessage_commit_edit_settings_tag: {
         LOG_INFO("Commit settings edit transaction");
+        const bool shouldReboot = deferredEditReboot;
         hasOpenEditTransaction = false;
         deferredEditSegments = 0;
-        saveChanges(SEGMENT_CONFIG | SEGMENT_MODULECONFIG | SEGMENT_DEVICESTATE | SEGMENT_CHANNELS | SEGMENT_NODEDATABASE);
+        deferredEditReboot = false;
+        saveChanges(SEGMENT_CONFIG | SEGMENT_MODULECONFIG | SEGMENT_DEVICESTATE | SEGMENT_CHANNELS | SEGMENT_NODEDATABASE,
+                    shouldReboot);
         flushChannelWarnings(); // one coalesced message for everything edited in this transaction
         break;
     }
@@ -1275,8 +1278,7 @@ bool AdminModule::handleSetModuleConfig(const meshtastic_ModuleConfig &c)
         if (!MQTT::isValidConfig(c.payload_variant.mqtt)) {
             return false;
         }
-        // Disable Bluetooth to prevent interference during MQTT configuration, except inside an edit
-        // transaction: saveChanges() defers the reboot there, so nothing would bring BLE back.
+        // A transaction still needs this transport for the remaining writes and commit.
         if (!hasOpenEditTransaction)
             disableBluetooth();
         moduleConfig.has_mqtt = true;
@@ -1296,9 +1298,8 @@ bool AdminModule::handleSetModuleConfig(const meshtastic_ModuleConfig &c)
             LOG_ERROR("Invalid serial config");
             return false;
         }
-        // Same transaction caveat as MQTT above: a deferred reboot would leave BLE down with no restore.
         if (!hasOpenEditTransaction)
-            disableBluetooth(); // Disable Bluetooth to prevent interference during Serial configuration
+            disableBluetooth(); // Prevent interference during standalone Serial configuration.
         moduleConfig.has_serial = true;
         moduleConfig.serial = c.payload_variant.serial;
         break;
@@ -1902,11 +1903,14 @@ void AdminModule::expireStaleEditTransaction()
 
     LOG_WARN("Edit transaction abandoned for %us; committing what it applied", EDIT_TRANSACTION_IDLE_MS / 1000);
     hasOpenEditTransaction = false;
-    int segments = deferredEditSegments;
+    const int segments = deferredEditSegments;
+    const bool shouldReboot = deferredEditReboot;
     deferredEditSegments = 0;
-    // No reboot: the settings are already live in RAM and the client that would expect one is gone.
+    deferredEditReboot = false;
     if (segments)
         saveChanges(segments, false);
+    if (shouldReboot)
+        reboot(DEFAULT_REBOOT_SECONDS);
     flushChannelWarnings();
 }
 
@@ -1922,6 +1926,7 @@ void AdminModule::saveChanges(int saveWhat, bool shouldReboot)
         LOG_INFO("Delay disk save until open transaction commits");
         editTransactionActivityMs = millis(); // still in use, so not the abandoned kind we time out
         deferredEditSegments |= saveWhat;
+        deferredEditReboot |= shouldReboot;
     }
     if (shouldReboot && !hasOpenEditTransaction) {
         reboot(DEFAULT_REBOOT_SECONDS);
