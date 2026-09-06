@@ -80,16 +80,74 @@ void logConnParamRequest(const char *what, uint16_t connHandle, BleConnParamSend
     }
 }
 
-// Custom GAP listener: the scheduler's completion (drain) and disconnect (reset) inputs. Fires on
-// the NimBLE host task alongside the per-connection server callbacks.
+// Stable names for scheduler outcomes emitted in connection diagnostics.
+const char *connParamResultName(BleConnParamSendResult result)
+{
+    switch (result) {
+    case BleConnParamSendResult::Sent:
+        return "sent";
+    case BleConnParamSendResult::Busy:
+        return "busy-deferred";
+    case BleConnParamSendResult::Refused:
+        return "refused-dropped";
+    case BleConnParamSendResult::Drained:
+        return "drained-idle";
+    case BleConnParamSendResult::Ignored:
+        return "unmatched";
+    default:
+        return "unknown";
+    }
+}
+
+void logGapConnect(uint16_t connHandle, int status)
+{
+    if (status != 0) {
+        LOG_WARN("BLE connect failed status=%d", status);
+        return;
+    }
+    // Initial negotiated parameters ride the existing onConnect descriptor line.
+    LOG_DEBUG("BLE connect conn %u status=0", connHandle);
+}
+
+void logGapConnUpdate(uint16_t connHandle, int status, BleConnParamSendResult result)
+{
+    if (status != 0) {
+        LOG_WARN("BLE conn %u update failed status=%d result=%s", connHandle, status, connParamResultName(result));
+        return;
+    }
+    struct ble_gap_conn_desc desc;
+    int rc = ble_gap_conn_find(connHandle, &desc);
+    if (rc != 0) {
+        LOG_WARN("BLE conn %u update accepted result=%s; params unavailable, conn find rc=%d", connHandle,
+                 connParamResultName(result), rc);
+        return;
+    }
+    LOG_DEBUG("BLE conn %u update accepted interval=%u*1.25ms latency=%u supervision_timeout=%u*10ms result=%s", connHandle,
+              desc.conn_itvl, desc.conn_latency, desc.supervision_timeout, connParamResultName(result));
+}
+
+void logGapDisconnect(const struct ble_gap_conn_desc &conn, int reason)
+{
+    LOG_INFO("BLE disconnect conn %u reason=0x%x final interval=%u*1.25ms latency=%u supervision_timeout=%u*10ms",
+             conn.conn_handle, reason, conn.conn_itvl, conn.conn_latency, conn.supervision_timeout);
+}
+
+// Feed GAP lifecycle events into the scheduler and report negotiated connection state.
 int bleConnParamGapEvent(ble_gap_event *event, void *arg)
 {
     (void)arg;
     switch (event->type) {
-    case BLE_GAP_EVENT_CONN_UPDATE:
-        connParamScheduler.onConnUpdateComplete(event->conn_update.conn_handle, event->conn_update.status);
+    case BLE_GAP_EVENT_CONNECT:
+        logGapConnect(event->connect.conn_handle, event->connect.status);
         break;
+    case BLE_GAP_EVENT_CONN_UPDATE: {
+        BleConnParamSendResult result =
+            connParamScheduler.onConnUpdateComplete(event->conn_update.conn_handle, event->conn_update.status);
+        logGapConnUpdate(event->conn_update.conn_handle, event->conn_update.status, result);
+        break;
+    }
     case BLE_GAP_EVENT_DISCONNECT:
+        logGapDisconnect(event->disconnect.conn, event->disconnect.reason);
         connParamScheduler.onDisconnect(event->disconnect.conn.conn_handle);
         break;
     default:
@@ -811,7 +869,8 @@ class NimbleBluetoothServerCallback : public BLEServerCallbacks
     void onConnect(BLEServer *pServer, struct ble_gap_conn_desc *desc)
     {
         BLEAddress peer_addr(desc->peer_id_addr);
-        LOG_INFO("BLE incoming connection %s", peer_addr.toString().c_str());
+        LOG_INFO("BLE incoming connection %s conn %u interval=%u*1.25ms latency=%u supervision_timeout=%u*10ms",
+                 peer_addr.toString().c_str(), desc->conn_handle, desc->conn_itvl, desc->conn_latency, desc->supervision_timeout);
 
         const uint16_t connHandle = desc->conn_handle;
 
@@ -985,9 +1044,8 @@ void NimbleBluetooth::setup()
 
     BLEDevice::init(getDeviceName());
 
-    // Register the connection-parameter scheduler's GAP listener before anything can connect.
-    // Re-registering on every BLE enable is what the library expects (EALREADY is tolerated) and
-    // survives a host teardown between cycles.
+    // Re-register on every BLE enable so the GAP handler survives host teardown between cycles;
+    // NimBLE tolerates an existing registration with EALREADY.
     BLEDevice::setCustomGapHandler(bleConnParamGapEvent);
     BLEDevice::setPower(ESP_PWR_LVL_P9);
 
