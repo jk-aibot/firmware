@@ -1006,6 +1006,7 @@ static meshtastic_ChannelFile savedChannelFile;
 // Saved/torn down for every test so a failed assertion's longjmp cannot leave one dangling.
 static Router *savedRouter;
 static Router *hamMockRouter;
+static uint32_t savedRebootAtMsec;
 
 // Called from setUp/tearDown for every test, not opted into by a handful. A shared NodeDB plus
 // unrestored config/owner/devicestate/channelFile means each test inherits whatever its
@@ -1015,6 +1016,8 @@ static void replaceAdminRadioGlobals()
     savedNodeDB = nodeDB;
     savedNodeInfoModule = nodeInfoModule;
     savedRouter = router;
+    savedRebootAtMsec = rebootAtMsec;
+    rebootAtMsec = 0;
     savedDeviceState = devicestate;
     savedOwner = owner;
     savedConfig = config;
@@ -1037,6 +1040,7 @@ static void restoreAdminRadioGlobals()
     hamMockRouter = nullptr;
     delete replacementNodeDB;
     replacementNodeDB = nullptr;
+    rebootAtMsec = savedRebootAtMsec;
     devicestate = savedDeviceState;
     owner = savedOwner;
     config = savedConfig;
@@ -2262,6 +2266,35 @@ static void test_editTransaction_active_isNotRetired()
     TEST_ASSERT_EQUAL_INT(1, warningsContaining("There may be name issues on channels 0, 1"));
 }
 
+static void test_editTransaction_commitWithoutRebootChange_doesNotScheduleReboot()
+{
+    usePresetLongFast();
+    sendBeginEdit();
+    sendSetChannel(makeChannel(0, meshtastic_Channel_Role_PRIMARY, "mesh", DEFAULT_KEY, 1));
+
+    TEST_ASSERT_FALSE(testAdmin->editTransactionNeedsReboot());
+    sendCommitEdit();
+
+    TEST_ASSERT_FALSE(testAdmin->editTransactionOpen());
+    TEST_ASSERT_EQUAL_UINT32(0, rebootAtMsec);
+}
+
+static void test_editTransaction_commitWithRebootChange_schedulesReboot()
+{
+    sendBeginEdit();
+    meshtastic_Config c = meshtastic_Config_init_zero;
+    c.which_payload_variant = meshtastic_Config_bluetooth_tag;
+    c.payload_variant.bluetooth = config.bluetooth;
+    c.payload_variant.bluetooth.fixed_pin ^= 1u;
+    testAdmin->handleSetConfig(c, false);
+
+    TEST_ASSERT_TRUE(testAdmin->editTransactionNeedsReboot());
+    sendCommitEdit();
+
+    TEST_ASSERT_FALSE(testAdmin->editTransactionOpen());
+    TEST_ASSERT_NOT_EQUAL_UINT32(0, rebootAtMsec);
+}
+
 static void test_warn_license_noTransaction_emittedImmediately()
 {
     usePresetLongFast();
@@ -2360,6 +2393,90 @@ static void test_toggleMutedNode_skipsRadioReload_butPersists()
 
     TEST_ASSERT_EQUAL_INT(0, counter.count);
     TEST_ASSERT_TRUE(nodeInfoLiteIsMuted(nodeDB->getMeshNode(TEST_NODE_NUM)));
+}
+
+// Test seam defined in AdminModule.cpp under PIO_UNIT_TESTING.
+extern uint32_t getDisableBluetoothCallCountForTest();
+extern void resetDisableBluetoothCallCountForTest();
+
+static meshtastic_ModuleConfig makeMqttModuleConfig()
+{
+    meshtastic_ModuleConfig config = meshtastic_ModuleConfig_init_zero;
+    config.which_payload_variant = meshtastic_ModuleConfig_mqtt_tag;
+    config.payload_variant.mqtt = meshtastic_ModuleConfig_MQTTConfig_init_zero;
+    return config;
+}
+
+static meshtastic_ModuleConfig makeSerialModuleConfig()
+{
+    meshtastic_ModuleConfig config = meshtastic_ModuleConfig_init_zero;
+    config.which_payload_variant = meshtastic_ModuleConfig_serial_tag;
+    config.payload_variant.serial = meshtastic_ModuleConfig_SerialConfig_init_zero;
+    return config;
+}
+
+static void test_mqttConfig_standaloneDisablesBluetooth()
+{
+    resetDisableBluetoothCallCountForTest();
+    TEST_ASSERT_TRUE(testAdmin->handleSetModuleConfig(makeMqttModuleConfig()));
+    TEST_ASSERT_EQUAL_UINT32(1, getDisableBluetoothCallCountForTest());
+}
+
+static void test_mqttConfig_transactionPreservesBluetooth()
+{
+    sendBeginEdit();
+    resetDisableBluetoothCallCountForTest();
+    TEST_ASSERT_TRUE(testAdmin->handleSetModuleConfig(makeMqttModuleConfig()));
+    TEST_ASSERT_EQUAL_UINT32(0, getDisableBluetoothCallCountForTest());
+    sendCommitEdit();
+}
+
+static void test_serialConfig_standaloneDisablesBluetooth()
+{
+    resetDisableBluetoothCallCountForTest();
+    TEST_ASSERT_TRUE(testAdmin->handleSetModuleConfig(makeSerialModuleConfig()));
+    TEST_ASSERT_EQUAL_UINT32(1, getDisableBluetoothCallCountForTest());
+}
+
+static void test_serialConfig_transactionPreservesBluetooth()
+{
+    sendBeginEdit();
+    resetDisableBluetoothCallCountForTest();
+    TEST_ASSERT_TRUE(testAdmin->handleSetModuleConfig(makeSerialModuleConfig()));
+    TEST_ASSERT_EQUAL_UINT32(0, getDisableBluetoothCallCountForTest());
+    sendCommitEdit();
+}
+
+static void test_abandonedTransaction_rebootsForDeferredBluetoothConfig()
+{
+    sendBeginEdit();
+    meshtastic_Config c = meshtastic_Config_init_zero;
+    c.which_payload_variant = meshtastic_Config_bluetooth_tag;
+    c.payload_variant.bluetooth = config.bluetooth;
+    c.payload_variant.bluetooth.fixed_pin ^= 1u;
+
+    rebootAtMsec = 0;
+    testAdmin->handleSetConfig(c, false);
+    TEST_ASSERT_EQUAL_UINT32(0, rebootAtMsec);
+
+    testAdmin->ageEditTransaction();
+    sendGetDeviceMetadata();
+    TEST_ASSERT_NOT_EQUAL_UINT32(0, rebootAtMsec);
+    rebootAtMsec = 0;
+}
+
+static void test_abandonedTransaction_doesNotRebootForLiveConfig()
+{
+    sendBeginEdit();
+    meshtastic_Config c = meshtastic_Config_init_zero;
+    c.which_payload_variant = meshtastic_Config_device_tag;
+    c.payload_variant.device = config.device;
+
+    rebootAtMsec = 0;
+    testAdmin->handleSetConfig(c, false);
+    testAdmin->ageEditTransaction();
+    sendGetDeviceMetadata();
+    TEST_ASSERT_EQUAL_UINT32(0, rebootAtMsec);
 }
 
 // -----------------------------------------------------------------------
@@ -2652,6 +2769,14 @@ void setup()
     RUN_TEST(test_handleSetConfig_presetChosenBeforeRegionSurvives);
     RUN_TEST(test_handleSetConfig_unsettingRegionKeepsPreset);
 
+    // Module-config transport gating (BLE preserved inside edit transactions)
+    RUN_TEST(test_mqttConfig_standaloneDisablesBluetooth);
+    RUN_TEST(test_mqttConfig_transactionPreservesBluetooth);
+    RUN_TEST(test_serialConfig_standaloneDisablesBluetooth);
+    RUN_TEST(test_serialConfig_transactionPreservesBluetooth);
+    RUN_TEST(test_abandonedTransaction_rebootsForDeferredBluetoothConfig);
+    RUN_TEST(test_abandonedTransaction_doesNotRebootForLiveConfig);
+
     // Channel-configuration warning + coalescing
     RUN_TEST(test_warn_singleChannel_variantName_oneSpecificMessage);
     RUN_TEST(test_warn_singleChannel_nameAndPsk_collapsedToCatchAll);
@@ -2661,6 +2786,8 @@ void setup()
     RUN_TEST(test_editTransaction_abandoned_isRetiredOnNextAdminMessage);
     RUN_TEST(test_editTransaction_abandoned_laterWriteIsNoLongerDeferred);
     RUN_TEST(test_editTransaction_active_isNotRetired);
+    RUN_TEST(test_editTransaction_commitWithoutRebootChange_doesNotScheduleReboot);
+    RUN_TEST(test_editTransaction_commitWithRebootChange_schedulesReboot);
     RUN_TEST(test_warn_license_noTransaction_emittedImmediately);
     RUN_TEST(test_warn_license_transaction_coalescedToSingleMessage);
 
