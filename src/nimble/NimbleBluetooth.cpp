@@ -227,6 +227,20 @@ static std::atomic<uint16_t> nimbleBluetoothConnHandle{BLE_HS_CONN_HANDLE_NONE};
 // Retry advertising from the main task after disconnects and failed connections, once the
 // host has finished releasing connection resources or recovering from a reset.
 static std::atomic<bool> pendingStartAdvertising{false};
+static std::atomic<uint16_t> failedAdvertisingConnHandle{BLE_HS_CONN_HANDLE_NONE};
+
+static bool hasPendingFailedConnection()
+{
+    uint16_t handle = failedAdvertisingConnHandle.load();
+    if (handle == BLE_HS_CONN_HANDLE_NONE)
+        return false;
+    ble_gap_conn_desc desc;
+    if (ble_gap_conn_find(handle, &desc) == 0)
+        return true;
+    // The recorded connection is gone; clear it unless a newer failure was recorded meanwhile.
+    failedAdvertisingConnHandle.compare_exchange_strong(handle, BLE_HS_CONN_HANDLE_NONE);
+    return false;
+}
 
 // Set by deinit() before it disconnects. Makes onRead bail immediately instead of arming the
 // up-to-20s wait, so a read arriving mid-teardown can't pin the NimBLE task and stall the disconnect.
@@ -342,7 +356,8 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
     {
         if (pendingStartAdvertising.exchange(false)) {
             if (!bleDraining && !checkIsConnected() && nimbleBluetooth &&
-                (!ble_hs_synced() || (!BLEDevice::getAdvertising()->isAdvertising() && !nimbleBluetooth->startAdvertising()))) {
+                (!ble_hs_synced() || hasPendingFailedConnection() ||
+                 (!BLEDevice::getAdvertising()->isAdvertising() && !nimbleBluetooth->startAdvertising()))) {
                 pendingStartAdvertising = true;
                 return 200;
             }
@@ -848,6 +863,7 @@ static void resetBleSessionState()
 
     connParamScheduler.reset();
     nimbleBluetoothConnHandle = BLE_HS_CONN_HANDLE_NONE;
+    failedAdvertisingConnHandle = BLE_HS_CONN_HANDLE_NONE;
 }
 
 class NimbleBluetoothServerCallback : public BLEServerCallbacks
@@ -908,9 +924,10 @@ class NimbleBluetoothServerCallback : public BLEServerCallbacks
 
 static int advertisingGapEvent(ble_gap_event *event, void *)
 {
-    if (event->type == BLE_GAP_EVENT_CONNECT && event->connect.status != 0 && !bleDraining) {
+    if (event->type == BLE_GAP_EVENT_CONNECT && event->connect.status == BLE_HS_EAGAIN && !bleDraining) {
         // NimBLE can report failure before freeing its only connection slot, with no disconnect
         // callback afterward. The library's inline advertising restart then fails with ENOMEM.
+        failedAdvertisingConnHandle = event->connect.conn_handle;
         pendingStartAdvertising = true;
         if (bluetoothPhoneAPI)
             bluetoothPhoneAPI->setIntervalFromNow(0);
