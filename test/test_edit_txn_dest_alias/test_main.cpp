@@ -353,6 +353,17 @@ static void test_handleToRadio_afterCommit_noRewrite(void)
     TEST_ASSERT_EQUAL_UINT32(ORIGINAL_SELF, p.to);
 }
 
+static void test_handleToRadio_afterIdleExpiry_noRewrite(void)
+{
+    sendBegin();
+    myNodeInfo.my_node_num = POST_REKEY_SELF;
+    admin->ageEditTransaction();
+
+    meshtastic_MeshPacket p = makeAdminPacket(ORIGINAL_SELF);
+    service->handleToRadio(p);
+    TEST_ASSERT_EQUAL_UINT32(ORIGINAL_SELF, p.to);
+}
+
 // Encrypted payload: variant guard short-circuits before the rewrite.
 static void test_handleToRadio_encryptedPayload_notRewritten(void)
 {
@@ -429,6 +440,7 @@ void setup()
     RUN_TEST(test_handleToRadio_oneRekey_rewritesToCurrentSelf);
     RUN_TEST(test_handleToRadio_multipleRekeys_eachRewrittenToCurrentSelf);
     RUN_TEST(test_handleToRadio_afterCommit_noRewrite);
+    RUN_TEST(test_handleToRadio_afterIdleExpiry_noRewrite);
     RUN_TEST(test_handleToRadio_encryptedPayload_notRewritten);
     RUN_TEST(test_handleToRadio_nonAdminPort_notRewritten);
     RUN_TEST(test_handleToRadio_remoteDestination_notRewritten);

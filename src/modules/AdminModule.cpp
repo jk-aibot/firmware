@@ -1899,6 +1899,13 @@ void AdminModule::reboot(int32_t seconds)
     rebootAtMsec = (seconds < 0) ? 0 : Time::timerEndsAtMillis(seconds * 1000);
 }
 
+NodeNum AdminModule::getEditTransactionOriginalDest() const
+{
+    return hasOpenEditTransaction && Throttle::isWithinTimespanMs(editTransactionActivityMs, EDIT_TRANSACTION_IDLE_MS)
+               ? editTransactionOriginalDest
+               : 0;
+}
+
 // Without this, a commit that never arrives leaves the transaction open forever and every later
 // config write from any client is applied, acknowledged, and then never saved.
 void AdminModule::expireStaleEditTransaction()

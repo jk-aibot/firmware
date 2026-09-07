@@ -107,7 +107,7 @@ class AdminModule : public ProtobufModule<meshtastic_AdminMessage>, public Obser
     void noteOutgoingAdminRequest(const meshtastic_MeshPacket &p);
 
     /// Local destination recorded at begin_edit_settings, or 0 when no alias is active.
-    NodeNum getEditTransactionOriginalDest() const { return editTransactionOriginalDest; }
+    NodeNum getEditTransactionOriginalDest() const;
 
   private:
     // An admin response has no session passkey and its sender need not hold an admin key, so a
