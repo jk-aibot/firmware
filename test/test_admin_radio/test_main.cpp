@@ -2450,10 +2450,14 @@ static void test_editTransaction_commitWithoutRebootChange_doesNotScheduleReboot
     sendSetChannel(makeChannel(0, meshtastic_Channel_Role_PRIMARY, "mesh", DEFAULT_KEY, 1));
 
     TEST_ASSERT_FALSE(testAdmin->editTransactionNeedsReboot());
+    resetDisableBluetoothCallCountForTest(); // isolate the commit itself
     sendCommitEdit();
 
     TEST_ASSERT_FALSE(testAdmin->editTransactionOpen());
     TEST_ASSERT_EQUAL_UINT32(0, rebootAtMsec);
+    // A live-safe commit persists without a reboot, so nothing may tear the transport down:
+    // the ESP32 BLE teardown releases BTDM memory and only a reboot brings it back.
+    TEST_ASSERT_EQUAL_UINT32(0, getDisableBluetoothCallCountForTest());
 }
 
 static void test_editTransaction_commitWithRebootChange_schedulesReboot()
