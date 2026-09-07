@@ -2354,6 +2354,13 @@ class ConfigChangedCounter : public Observer<void *>
 
 static const NodeNum TEST_NODE_NUM = 0x12345678;
 
+// The suite sandbox persists /prefs across test cases, so TEST_NODE_NUM may arrive carrying a
+// muted bit some predecessor wrote. The toggle tests need a known starting direction, so seed it.
+static void seedUnmutedTestNode()
+{
+    nodeInfoLiteSetBit(nodeDB->getOrCreateMeshNode(TEST_NODE_NUM), NODEINFO_BITFIELD_IS_MUTED_MASK, false);
+}
+
 static void test_setFavoriteNode_skipsRadioReload_butPersists()
 {
     nodeDB->getOrCreateMeshNode(TEST_NODE_NUM);
@@ -2386,7 +2393,7 @@ static void test_setIgnoredNode_skipsRadioReload_butPersists()
 
 static void test_toggleMutedNode_skipsRadioReload_butPersists()
 {
-    nodeDB->getOrCreateMeshNode(TEST_NODE_NUM);
+    seedUnmutedTestNode();
     ConfigChangedCounter counter;
     counter.observe(&service->configChanged);
 
@@ -2493,7 +2500,7 @@ static void test_abandonedTransaction_doesNotRebootForLiveConfig()
 #if HAS_SCREEN
 static void test_toggleNodeMuted_flipsBitAndSkipsRadioReload()
 {
-    nodeDB->getOrCreateMeshNode(TEST_NODE_NUM);
+    seedUnmutedTestNode();
     ConfigChangedCounter counter;
     counter.observe(&service->configChanged);
 
