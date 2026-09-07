@@ -469,17 +469,10 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
     }
     case meshtastic_AdminMessage_factory_reset_config_tag: {
         LOG_INFO("Initiate factory config reset");
-#if defined(ARCH_ESP32)
-        // Stop NimBLE before erasing NVS because its bond store lives there.
-        // Teardown after erase can panic while the stack still references NVS state.
-        disableBluetooth();
-#endif
-        // nRF52 keeps BLE active while reset cleanup performs its flash operations.
+        // Keep BLE active while reset cleanup performs nRF flash operations.
         nodeDB->factoryReset();
         LOG_INFO("Factory config reset finished, rebooting soon");
-#if !defined(ARCH_ESP32)
         disableBluetooth();
-#endif
         reboot(DEFAULT_REBOOT_SECONDS);
         break;
     }
