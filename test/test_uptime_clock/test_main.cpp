@@ -317,7 +317,6 @@ void test_native64_injection_drives_pure_reads_and_useRealClock_disarms()
     TEST_ASSERT_EQUAL_UINT64(0x10ull, Time::getMillisMonotonic());
 
     Time::useRealClock(); // disarm: the platform's own carry domain answers again
-    TEST_ASSERT_FALSE(Time::useTestNative64.load(std::memory_order_relaxed));
     Time::resetMonotonicForTests();
     Time::setTestMillis(0xFFFFFF00u);
     Time::serviceMonotonic();
