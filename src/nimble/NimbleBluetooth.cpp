@@ -474,6 +474,14 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
 };
 
 static BluetoothPhoneAPI *bluetoothPhoneAPI;
+
+static void queueAdvertisingRestart()
+{
+    pendingStartAdvertising = true;
+    if (bluetoothPhoneAPI)
+        bluetoothPhoneAPI->setIntervalFromNow(0);
+    concurrency::mainDelay.interrupt();
+}
 /**
  * Subclasses can use this as a hook to provide custom notifications for their transport (i.e. bluetooth notifies)
  */
@@ -790,26 +798,24 @@ class NimbleBluetoothServerCallback : public BLEServerCallbacks
 
         resetBleSessionState();
 
-        // Defer the advertising restart to runOnce (see pendingStartAdvertising): calling
-        // startAdvertising() here would crash if this disconnect was a host reset.
-        pendingStartAdvertising = true;
-        if (bluetoothPhoneAPI) {
-            bluetoothPhoneAPI->setIntervalFromNow(0);
-        }
-        concurrency::mainDelay.interrupt(); // wake the main loop to service the restart
+        // Defer the advertising restart to runOnce; a host-reset disconnect cannot safely re-enter GAP here.
+        queueAdvertisingRestart();
     }
 };
 
 static int advertisingGapEvent(ble_gap_event *event, void *)
 {
-    if (event->type == BLE_GAP_EVENT_CONNECT && event->connect.status == BLE_HS_EAGAIN && !bleDraining) {
-        // NimBLE can report failure before freeing its only connection slot, with no disconnect
-        // callback afterward. The library's inline advertising restart then fails with ENOMEM.
+    if (bleDraining)
+        return 0;
+
+    if (event->type == BLE_GAP_EVENT_CONNECT && event->connect.status == BLE_HS_EAGAIN) {
+        // NimBLE can report failure before freeing its only connection slot, with no disconnect callback afterward.
         failedAdvertisingConnHandle = event->connect.conn_handle;
-        pendingStartAdvertising = true;
-        if (bluetoothPhoneAPI)
-            bluetoothPhoneAPI->setIntervalFromNow(0);
-        concurrency::mainDelay.interrupt();
+        queueAdvertisingRestart();
+    } else if (event->type == BLE_GAP_EVENT_ADV_COMPLETE && event->adv_complete.reason != 0) {
+        // Advertising is configured to run indefinitely; a nonzero completion reason needs recovery on the main task.
+        LOG_WARN("BLE advertising ended rc=%d; retry", event->adv_complete.reason);
+        queueAdvertisingRestart();
     }
     return 0;
 }
@@ -1002,12 +1008,8 @@ void NimbleBluetooth::setup()
     bleServer->setCallbacks(&serverCallbacks);
     setupService();
     // A failed first start has no later disconnect or advertising event to retry from.
-    if (!startAdvertising()) {
-        pendingStartAdvertising = true;
-        if (bluetoothPhoneAPI)
-            bluetoothPhoneAPI->setIntervalFromNow(0);
-        concurrency::mainDelay.interrupt(); // wake the main loop to service the restart
-    }
+    if (!startAdvertising())
+        queueAdvertisingRestart();
 }
 
 void NimbleBluetooth::setupService()
