@@ -1,5 +1,6 @@
 #include "configuration.h"
 #if !MESHTASTIC_EXCLUDE_BLUETOOTH
+#include "BleConnParamScheduler.h"
 #include "BluetoothCommon.h"
 #include "NimbleBluetooth.h"
 #include "PowerFSM.h"
@@ -34,6 +35,68 @@ namespace
 constexpr uint16_t kPreferredBleMtu = 517;
 constexpr uint16_t kPreferredBleTxOctets = 251;
 constexpr uint16_t kPreferredBleTxTimeUs = (kPreferredBleTxOctets + 14) * 8;
+
+constexpr uint16_t kHighThroughputMinInterval = 6;  // 7.5ms
+constexpr uint16_t kHighThroughputMaxInterval = 12; // 15ms
+
+} // namespace
+namespace
+{
+// Translate NimBLE submission results; EALREADY means an existing procedure owns
+// the next completion event, while other failures produce no completion.
+struct NimbleGapConnParamSender {
+    BleConnParamSendResult send(uint16_t connHandle, BleConnParams params)
+    {
+        ble_gap_upd_params gap;
+        gap.itvl_min = params.minInterval;
+        gap.itvl_max = params.maxInterval;
+        gap.latency = params.latency;
+        gap.supervision_timeout = params.timeout;
+        gap.min_ce_len = BLE_GAP_INITIAL_CONN_MIN_CE_LEN;
+        gap.max_ce_len = BLE_GAP_INITIAL_CONN_MAX_CE_LEN;
+        int rc = ble_gap_update_params(connHandle, &gap);
+        return rc == 0 ? BleConnParamSendResult::Sent
+                       : (rc == BLE_HS_EALREADY ? BleConnParamSendResult::Busy : BleConnParamSendResult::Refused);
+    }
+};
+
+NimbleGapConnParamSender bleConnParamSender;
+BleConnParamSchedulerT<NimbleGapConnParamSender> connParamScheduler(bleConnParamSender);
+
+void logConnParamRequest(const char *what, uint16_t connHandle, BleConnParamSendResult result)
+{
+    switch (result) {
+    case BleConnParamSendResult::Sent:
+        LOG_DEBUG("BLE conn %u %s params sent", connHandle, what);
+        break;
+    case BleConnParamSendResult::Busy:
+        LOG_INFO("BLE conn %u %s params queued behind in-flight update", connHandle, what);
+        break;
+    case BleConnParamSendResult::Refused:
+        LOG_WARN("BLE conn %u %s params refused; dropped", connHandle, what);
+        break;
+    default:
+        break;
+    }
+}
+
+// Custom GAP listener: the scheduler's completion (drain) and disconnect (reset) inputs. Fires on
+// the NimBLE host task alongside the per-connection server callbacks.
+int bleConnParamGapEvent(ble_gap_event *event, void *arg)
+{
+    (void)arg;
+    switch (event->type) {
+    case BLE_GAP_EVENT_CONN_UPDATE:
+        connParamScheduler.onConnUpdateComplete(event->conn_update.conn_handle, event->conn_update.status);
+        break;
+    case BLE_GAP_EVENT_DISCONNECT:
+        connParamScheduler.onDisconnect(event->disconnect.conn.conn_handle);
+        break;
+    default:
+        break;
+    }
+    return 0;
+}
 } // namespace
 
 #ifdef ARCH_ESP32
@@ -429,17 +492,14 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
         recommendations.)
 
         Selected settings:
-            minInterval (units of 1.25ms): 7.5ms = 6 (lower than the Apple recommended minimum, but allows faster when the client
-        supports it.)
+            minInterval (units of 1.25ms): 7.5ms = 6
             maxInterval (units of 1.25ms): 15ms = 12
             latency: 0 (don't allow peripheral to skip any connection events)
             timeout (units of 10ms): 6 seconds = 600 (supervision timeout)
-
-        These are intentionally aggressive to prioritize speed over power consumption, but are only used for a few seconds at
-        setup. Not worth adjusting much.
         */
         LOG_INFO("BLE requestHighThroughputConnection");
-        bleServer->updateConnParams(conn_handle, 6, 12, 0, 600);
+        BleConnParams params{kHighThroughputMinInterval, kHighThroughputMaxInterval, 0, 600};
+        logConnParamRequest("high-throughput", conn_handle, connParamScheduler.request(conn_handle, params));
     }
 
     void requestLowerPowerConnection(uint16_t conn_handle)
@@ -462,7 +522,8 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
         per second.
         */
         LOG_INFO("BLE requestLowerPowerConnection");
-        bleServer->updateConnParams(conn_handle, 24, 40, 2, 600);
+        BleConnParams params{24, 40, 2, 600};
+        logConnParamRequest("lower-power", conn_handle, connParamScheduler.request(conn_handle, params));
     }
 };
 
@@ -735,6 +796,7 @@ static void resetBleSessionState()
 
     memset(lastToRadio, 0, sizeof(lastToRadio));
 
+    connParamScheduler.reset();
     nimbleBluetoothConnHandle = BLE_HS_CONN_HANDLE_NONE;
 }
 
@@ -767,7 +829,8 @@ class NimbleBluetoothServerCallback : public BLEServerCallbacks
 #endif
 
         LOG_INFO("BLE conn %u peer MTU %u (target %u)", connHandle, pServer->getPeerMTU(connHandle), kPreferredBleMtu);
-        pServer->updateConnParams(connHandle, 6, 12, 0, 200);
+        BleConnParams params{kHighThroughputMinInterval, kHighThroughputMaxInterval, 0, 600};
+        logConnParamRequest("connect", connHandle, connParamScheduler.request(connHandle, params));
     }
 
     void onDisconnect(BLEServer *pServer, struct ble_gap_conn_desc *desc)
@@ -921,6 +984,11 @@ void NimbleBluetooth::setup()
 #endif
 
     BLEDevice::init(getDeviceName());
+
+    // Register the connection-parameter scheduler's GAP listener before anything can connect.
+    // Re-registering on every BLE enable is what the library expects (EALREADY is tolerated) and
+    // survives a host teardown between cycles.
+    BLEDevice::setCustomGapHandler(bleConnParamGapEvent);
     BLEDevice::setPower(ESP_PWR_LVL_P9);
 
     int mtuResult = BLEDevice::setMTU(kPreferredBleMtu);
