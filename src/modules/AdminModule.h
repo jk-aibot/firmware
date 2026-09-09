@@ -51,6 +51,8 @@ class AdminModule : public ProtobufModule<meshtastic_AdminMessage>, public Obser
 #ifdef PIO_UNIT_TESTING
     int lastSaveWhatForTest = 0;
 #endif
+    // `mp.from` for the open transaction; local phone transports use 0.
+    NodeNum editTransactionOwner = 0;
     // Local destination seen at transaction begin; used to resolve phone writes after rekey.
     NodeNum editTransactionOriginalDest = 0;
 

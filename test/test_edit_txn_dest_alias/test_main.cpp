@@ -183,6 +183,43 @@ static void sendRemoteBegin()
     admin->handleReceivedProtobuf(mp, &m);
 }
 
+static void sendRemoteCommit()
+{
+    config.security.admin_key[0].size = 32;
+    memcpy(config.security.admin_key[0].bytes, REMOTE_KEY, 32);
+
+    meshtastic_AdminMessage probe = meshtastic_AdminMessage_init_zero;
+    admin->setPassKey(&probe);
+
+    meshtastic_AdminMessage m = meshtastic_AdminMessage_init_zero;
+    m.which_payload_variant = meshtastic_AdminMessage_commit_edit_settings_tag;
+    m.commit_edit_settings = true;
+    m.session_passkey = probe.session_passkey;
+
+    meshtastic_MeshPacket mp = meshtastic_MeshPacket_init_zero;
+    mp.from = STRANGER_REMOTE;
+    mp.to = nodeDB->getNodeNum();
+    mp.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
+    mp.pki_encrypted = true;
+    mp.public_key.size = 32;
+    memcpy(mp.public_key.bytes, REMOTE_KEY, 32);
+
+    admin->handleReceivedProtobuf(mp, &m);
+}
+
+static bool decodeRoutingError(meshtastic_MeshPacket *reply, meshtastic_Routing_Error &out)
+{
+    if (!reply || reply->which_payload_variant != meshtastic_MeshPacket_decoded_tag ||
+        reply->decoded.portnum != meshtastic_PortNum_ROUTING_APP)
+        return false;
+    meshtastic_Routing routing = meshtastic_Routing_init_zero;
+    if (!pb_decode_from_bytes(reply->decoded.payload.bytes, reply->decoded.payload.size, &meshtastic_Routing_msg, &routing) ||
+        routing.which_variant != meshtastic_Routing_error_reason_tag)
+        return false;
+    out = routing.error_reason;
+    return true;
+}
+
 // Allocates a reply so the pool stays clean; used to drive expireStaleEditTransaction.
 static void sendGetDeviceMetadata()
 {
@@ -284,6 +321,24 @@ static void test_alias_repeatedBeginAfterRekey_preservesOriginalDest(void)
     sendBegin();
 
     TEST_ASSERT_EQUAL_UINT32(ORIGINAL_SELF, admin->getEditTransactionOriginalDest());
+}
+
+static void test_alias_remoteCommit_doesNotTerminateLocalTransaction(void)
+{
+    sendBegin();
+    myNodeInfo.my_node_num = POST_REKEY_SELF;
+
+    sendRemoteCommit();
+
+    meshtastic_Routing_Error error = meshtastic_Routing_Error_NONE;
+    TEST_ASSERT_TRUE_MESSAGE(decodeRoutingError(admin->reply(), error), "non-owner commit must return a routing error");
+    TEST_ASSERT_EQUAL(meshtastic_Routing_Error_BAD_REQUEST, error);
+    TEST_ASSERT_TRUE(admin->editTransactionOpen());
+    TEST_ASSERT_EQUAL_UINT32(ORIGINAL_SELF, admin->getEditTransactionOriginalDest());
+    admin->drainReply();
+
+    sendCommit();
+    TEST_ASSERT_FALSE(admin->editTransactionOpen());
 }
 
 // A remote PKC begin must NOT plant a local alias; a follow-up local begin still captures its own self.
@@ -435,6 +490,7 @@ void setup()
     RUN_TEST(test_alias_isClearedOnExpiry);
     RUN_TEST(test_alias_isRetainedAcrossMultipleRekeys);
     RUN_TEST(test_alias_repeatedBeginAfterRekey_preservesOriginalDest);
+    RUN_TEST(test_alias_remoteCommit_doesNotTerminateLocalTransaction);
     RUN_TEST(test_alias_remoteBegin_doesNotCapture);
 
     // MeshService::handleToRadio integration
