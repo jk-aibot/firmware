@@ -316,8 +316,9 @@ void test_native64_injection_drives_pure_reads_and_useRealClock_disarms()
     Time::setTestMonotonicMs64(0x10ull);
     TEST_ASSERT_EQUAL_UINT64(0x10ull, Time::getMillisMonotonic());
 
-    Time::useRealClock(); // disarm: the platform's own carry domain answers again
     Time::resetMonotonicForTests();
+    Time::setTestMonotonicMs64(0x900000000ull); // arm native-64 so the disarm has an effect to undo
+    Time::useRealClock();                       // disarm: the platform's own carry domain answers again
     Time::setTestMillis(0xFFFFFF00u);
     Time::serviceMonotonic();
     Time::advanceTestMillis(0x200u);
