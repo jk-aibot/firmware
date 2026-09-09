@@ -808,9 +808,11 @@ static int advertisingGapEvent(ble_gap_event *event, void *)
     if (bleDraining)
         return 0;
 
-    if (event->type == BLE_GAP_EVENT_CONNECT && event->connect.status == BLE_HS_EAGAIN) {
-        // NimBLE can report failure before freeing its only connection slot, with no disconnect callback afterward.
-        failedAdvertisingConnHandle = event->connect.conn_handle;
+    if (event->type == BLE_GAP_EVENT_CONNECT && event->connect.status != 0) {
+        // A failed connect stops advertising with no disconnect callback afterward; EAGAIN can
+        // also hold the connection slot briefly, so recovery waits for that handle to go away.
+        if (event->connect.status == BLE_HS_EAGAIN)
+            failedAdvertisingConnHandle = event->connect.conn_handle;
         queueAdvertisingRestart();
     } else if (event->type == BLE_GAP_EVENT_ADV_COMPLETE && event->adv_complete.reason != 0) {
         // Advertising is configured to run indefinitely; a nonzero completion reason needs recovery on the main task.
