@@ -77,6 +77,7 @@ static AdminModule *savedAdminModule = nullptr;
 static NodeDB *savedNodeDB = nullptr;
 static Router *savedRouter = nullptr;
 static RoutingModule *savedRoutingModule = nullptr;
+static MeshService *savedService = nullptr;
 static meshtastic_Config_SecurityConfig_admin_key_t savedAdminKey0;
 static pb_size_t savedAdminKeyCount = 0;
 
@@ -87,6 +88,7 @@ void setUp(void)
     savedNodeDB = nodeDB;
     savedRouter = router;
     savedRoutingModule = routingModule;
+    savedService = service;
     // Snapshot admin_key[0] so sendRemoteBegin's write is reverted per-test. The auth gate consults
     // slot 0; other slots and the count are not touched.
     savedAdminKey0 = config.security.admin_key[0];
@@ -113,7 +115,7 @@ void tearDown(void)
     delete admin;
     admin = nullptr;
     adminModule = savedAdminModule;
-    service = nullptr;
+    service = savedService;
     delete mockService;
     mockService = nullptr;
     router = savedRouter;
