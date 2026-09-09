@@ -2517,6 +2517,8 @@ static void assertRoutingSuccessReply(uint32_t requestId)
     meshtastic_Routing routing = meshtastic_Routing_init_zero;
     TEST_ASSERT_TRUE(
         pb_decode_from_bytes(reply->decoded.payload.bytes, reply->decoded.payload.size, &meshtastic_Routing_msg, &routing));
+    // error_reason is zero-initialized; only an error_reason variant can legitimately carry NONE.
+    TEST_ASSERT_EQUAL(meshtastic_Routing_error_reason_tag, routing.which_variant);
     TEST_ASSERT_EQUAL(meshtastic_Routing_Error_NONE, routing.error_reason);
 }
 
