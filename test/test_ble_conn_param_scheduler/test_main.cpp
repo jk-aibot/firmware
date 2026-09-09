@@ -112,6 +112,17 @@ void test_refused_request_drops_intent_and_stays_usable(void)
     TEST_ASSERT_TRUE(sentParams(sender, 1) == kLow);
 }
 
+// The no-connection sentinel (BLE_HS_CONN_HANDLE_NONE, NimbleBluetooth's live sentinel) is refused
+// before any host submission, so a stale handle can never start a procedure.
+void test_no_connection_handle_is_refused(void)
+{
+    ScriptedSender sender;
+    BleConnParamSchedulerT<ScriptedSender> scheduler(sender);
+
+    assertResult(scheduler.request(0xFFFF, kHigh), BleConnParamSendResult::Refused);
+    TEST_ASSERT_EQUAL_UINT(0, sender.calls.size());
+}
+
 // EALREADY on an idle submission retains the requested parameters until the host procedure ends.
 void test_busy_idle_submission_retries_after_host_completion(void)
 {
@@ -238,6 +249,7 @@ void setup()
     RUN_TEST(test_requests_coalesce_to_latest_and_drain_once);
     RUN_TEST(test_failed_completion_still_drains_queued_intent);
     RUN_TEST(test_refused_request_drops_intent_and_stays_usable);
+    RUN_TEST(test_no_connection_handle_is_refused);
     RUN_TEST(test_busy_idle_submission_retries_after_host_completion);
     RUN_TEST(test_busy_drained_submission_retries_latest_intent);
     RUN_TEST(test_disconnect_clears_queued_and_inflight);
