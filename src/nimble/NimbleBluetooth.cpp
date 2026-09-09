@@ -25,7 +25,8 @@
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
 #include "host/ble_store.h"
-#ifdef ARCH_ESP32
+#if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
+#include <esp_bt.h>
 #include <nvs.h>
 #include <nvs_flash.h>
 #endif
@@ -228,6 +229,12 @@ static std::atomic<uint16_t> nimbleBluetoothConnHandle{BLE_HS_CONN_HANDLE_NONE};
 // host has finished releasing connection resources or recovering from a reset.
 static std::atomic<bool> pendingStartAdvertising{false};
 static std::atomic<uint16_t> failedAdvertisingConnHandle{BLE_HS_CONN_HANDLE_NONE};
+#if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
+static constexpr uint32_t kAdvertisingHealthCheckMs = 5 * 60 * 1000;
+static uint32_t lastAdvertisingHealthCheckMs;
+#endif
+
+static void queueAdvertisingRestart();
 
 static bool hasPendingFailedConnection()
 {
@@ -354,6 +361,27 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
   protected:
     virtual int32_t runOnce() override
     {
+#if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
+        if (!bleDraining && nimbleBluetooth && nimbleBluetooth->isActive() && bleServer &&
+            bleServer->getConnectedCount() == 0 &&
+            !Throttle::isWithinTimespanMs(lastAdvertisingHealthCheckMs, kAdvertisingHealthCheckMs)) {
+            lastAdvertisingHealthCheckMs = millis();
+            const bool hostSynced = ble_hs_synced();
+            const bool advertising = hostSynced && BLEDevice::getAdvertising()->isAdvertising();
+            const auto controllerStatus = esp_bt_controller_get_status();
+
+            if (hostSynced && controllerStatus == ESP_BT_CONTROLLER_STATUS_ENABLED && !advertising) {
+                LOG_WARN("BLE idle health found advertising inactive; restarting");
+                if (!nimbleBluetooth->startAdvertising()) {
+                    queueAdvertisingRestart();
+                }
+            } else {
+                LOG_INFO("BLE idle health synced=%d advertising=%d controller=%d", hostSynced ? 1 : 0,
+                         advertising ? 1 : 0, (int)controllerStatus);
+            }
+        }
+#endif
+
         if (pendingStartAdvertising.exchange(false)) {
             if (!bleDraining && !checkIsConnected() && nimbleBluetooth &&
                 (!ble_hs_synced() || hasPendingFailedConnection() ||
@@ -387,7 +415,14 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
             runOnceHandleToPhoneQueue(); // push data from getFromRadio to onRead
         }
 
-        // the run is triggered via NimbleBluetoothToRadioCallback and NimbleBluetoothFromRadioCallback
+#if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
+        // Sample host/controller state while idle without restarting advertising that still reports active.
+        if (!bleDraining && nimbleBluetooth && nimbleBluetooth->isActive() && bleServer &&
+            bleServer->getConnectedCount() == 0)
+            return kAdvertisingHealthCheckMs;
+#endif
+
+        // Otherwise the run is triggered via the BLE callbacks above.
         return INT32_MAX;
     }
 
