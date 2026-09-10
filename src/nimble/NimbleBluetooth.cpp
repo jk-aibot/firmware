@@ -25,10 +25,12 @@
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
 #include "host/ble_store.h"
-#if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
-#include <esp_bt.h>
+#ifdef ARCH_ESP32
 #include <nvs.h>
 #include <nvs_flash.h>
+#if defined(CONFIG_IDF_TARGET_ESP32)
+#include <esp_bt.h>
+#endif
 #endif
 
 namespace
