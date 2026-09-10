@@ -25,10 +25,12 @@
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
 #include "host/ble_store.h"
-#if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
-#include <esp_bt.h>
+#ifdef ARCH_ESP32
 #include <nvs.h>
 #include <nvs_flash.h>
+#if defined(CONFIG_IDF_TARGET_ESP32)
+#include <esp_bt.h>
+#endif
 #endif
 
 namespace
@@ -362,8 +364,7 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
     virtual int32_t runOnce() override
     {
 #if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
-        if (!bleDraining && nimbleBluetooth && nimbleBluetooth->isActive() && bleServer &&
-            bleServer->getConnectedCount() == 0 &&
+        if (!bleDraining && nimbleBluetooth && nimbleBluetooth->isActive() && bleServer && bleServer->getConnectedCount() == 0 &&
             !Throttle::isWithinTimespanMs(lastAdvertisingHealthCheckMs, kAdvertisingHealthCheckMs)) {
             lastAdvertisingHealthCheckMs = millis();
             const bool hostSynced = ble_hs_synced();
@@ -376,8 +377,8 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
                     queueAdvertisingRestart();
                 }
             } else {
-                LOG_INFO("BLE idle health synced=%d advertising=%d controller=%d", hostSynced ? 1 : 0,
-                         advertising ? 1 : 0, (int)controllerStatus);
+                LOG_INFO("BLE idle health synced=%d advertising=%d controller=%d", hostSynced ? 1 : 0, advertising ? 1 : 0,
+                         (int)controllerStatus);
             }
         }
 #endif
@@ -417,8 +418,7 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
 
 #if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
         // Sample host/controller state while idle without restarting advertising that still reports active.
-        if (!bleDraining && nimbleBluetooth && nimbleBluetooth->isActive() && bleServer &&
-            bleServer->getConnectedCount() == 0)
+        if (!bleDraining && nimbleBluetooth && nimbleBluetooth->isActive() && bleServer && bleServer->getConnectedCount() == 0)
             return kAdvertisingHealthCheckMs;
 #endif
 
