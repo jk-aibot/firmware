@@ -13,12 +13,16 @@ extern "C" void __real_r_assert_param(uint32_t param0, uint32_t param1, const ch
 extern "C" uint32_t ea_env[];
 extern "C" void *ld_sco_env[];
 extern "C" uint8_t sw_to_hw[];
+extern "C" uint32_t r_ea_time_get_halfslot_rounded();
+extern "C" uint32_t r_ea_time_get_slot_rounded();
 
 namespace
 {
 constexpr uintptr_t EA_PROG_TIMER_ASSERT_RETURN_PC = 0x400150b6U;
 constexpr uintptr_t EA_FINE_TARGET_INT_MASK_REG = 0x3ff7100cU;
+constexpr uintptr_t EA_FINE_TARGET_INT_STATUS_REG = 0x3ff71010U;
 constexpr uintptr_t EA_FINE_TARGET_REG = 0x3ff710b8U;
+constexpr uint32_t EA_SLOT_CLOCK_MASK = 0x07ffffffU;
 constexpr uintptr_t ESP32_DRAM_START = 0x3ffae000U;
 constexpr uintptr_t ESP32_DRAM_LAST_RECORD = 0x3fffffe0U;
 constexpr uintptr_t SCO_AUDIO_ASSERT_RETURN_PC = 0x40037edcU;
@@ -77,18 +81,31 @@ extern "C" void __wrap_r_assert_err(const char *condition, const char *file, int
         const auto activeWords = reinterpret_cast<volatile const uint32_t *>(active);
         const uint32_t missing = UINT32_MAX;
 
+        const uint32_t interruptMask = readReg32(EA_FINE_TARGET_INT_MASK_REG);
+        const uint32_t interruptStatus = readReg32(EA_FINE_TARGET_INT_STATUS_REG);
+        const uint32_t programmedTarget = readReg32(EA_FINE_TARGET_REG);
+        const uint32_t currentSlot = r_ea_time_get_slot_rounded();
+        const uint32_t currentHalfSlot = r_ea_time_get_halfslot_rounded();
+        const uint32_t primaryTimestamp =
+            isReadableEaRecord(primary) ? *reinterpret_cast<volatile const uint32_t *>(primary + 8) : missing;
+        const uint8_t primaryStartLatency = isReadableEaRecord(primary) ? primaryBytes[25] : UINT8_MAX;
+        const uint32_t requestedTarget = primaryTimestamp != missing && primaryStartLatency != UINT8_MAX
+                                             ? (primaryTimestamp - primaryStartLatency) & EA_SLOT_CLOCK_MASK
+                                             : missing;
+
         esp_rom_printf("BT_CTRL_EA_CONTEXT off0=%08x off20=%08x off64=%08x\n", static_cast<unsigned>(primary),
                        static_cast<unsigned>(secondary), static_cast<unsigned>(active));
-        esp_rom_printf("BT_CTRL_EA_TIMER mask=%08x target=%08x\n", static_cast<unsigned>(readReg32(EA_FINE_TARGET_INT_MASK_REG)),
-                       static_cast<unsigned>(readReg32(EA_FINE_TARGET_REG)));
+        esp_rom_printf("BT_CTRL_EA_TIMER mask=%08x status=%08x target=%08x\n", static_cast<unsigned>(interruptMask),
+                       static_cast<unsigned>(interruptStatus), static_cast<unsigned>(programmedTarget));
+        esp_rom_printf("BT_CTRL_EA_CLOCK slot=%08x half=%08x requested=%08x\n", static_cast<unsigned>(currentSlot),
+                       static_cast<unsigned>(currentHalfSlot), static_cast<unsigned>(requestedTarget));
         esp_rom_printf(
             "BT_CTRL_EA_RECORD p8=%08x p16=%04x p22=%u p25=%u s22=%u s23=%u s24=%u a4=%08x\n",
-            isReadableEaRecord(primary) ? static_cast<unsigned>(*reinterpret_cast<volatile const uint32_t *>(primary + 8))
-                                        : static_cast<unsigned>(missing),
+            static_cast<unsigned>(primaryTimestamp),
             isReadableEaRecord(primary) ? static_cast<unsigned>(*reinterpret_cast<volatile const uint16_t *>(primary + 16))
                                         : static_cast<unsigned>(UINT16_MAX),
             isReadableEaRecord(primary) ? static_cast<unsigned>(primaryBytes[22]) : static_cast<unsigned>(UINT8_MAX),
-            isReadableEaRecord(primary) ? static_cast<unsigned>(primaryBytes[25]) : static_cast<unsigned>(UINT8_MAX),
+            static_cast<unsigned>(primaryStartLatency),
             isReadableEaRecord(secondary) ? static_cast<unsigned>(secondaryBytes[22]) : static_cast<unsigned>(UINT8_MAX),
             isReadableEaRecord(secondary) ? static_cast<unsigned>(secondaryBytes[23]) : static_cast<unsigned>(UINT8_MAX),
             isReadableEaRecord(secondary) ? static_cast<unsigned>(secondaryBytes[24]) : static_cast<unsigned>(UINT8_MAX),
