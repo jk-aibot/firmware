@@ -1036,6 +1036,11 @@ void Power::reboot()
     waypointStore.saveToFlash();
 #endif
 #if defined(ARCH_ESP32)
+#if defined(CONFIG_IDF_TARGET_ESP32) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+    // A clean host/controller stop gives original ESP32 a stronger Bluetooth reset seam than ESP.restart() alone.
+    if (nimbleBluetooth && nimbleBluetooth->isActive())
+        nimbleBluetooth->deinit();
+#endif
     ESP.restart();
 #elif defined(ARCH_NRF52)
     nrf52FlashQuiesce();
