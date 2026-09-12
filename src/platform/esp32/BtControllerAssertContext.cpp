@@ -17,6 +17,10 @@ extern "C" uint8_t sw_to_hw[];
 namespace
 {
 constexpr uintptr_t EA_PROG_TIMER_ASSERT_RETURN_PC = 0x400150b6U;
+constexpr uintptr_t EA_FINE_TARGET_INT_MASK_REG = 0x3ff7100cU;
+constexpr uintptr_t EA_FINE_TARGET_REG = 0x3ff710b8U;
+constexpr uintptr_t ESP32_DRAM_START = 0x3ffae000U;
+constexpr uintptr_t ESP32_DRAM_LAST_RECORD = 0x3fffffe0U;
 constexpr uintptr_t SCO_AUDIO_ASSERT_RETURN_PC = 0x40037edcU;
 constexpr uint8_t DISABLED_SCO_SLOT = UINT8_MAX;
 bool spuriousScoIsrReported;
@@ -30,6 +34,16 @@ bool isSpuriousScoAudioIsrAssert(uintptr_t callerPc, int line)
 bool isEaProgTimerAssert(uintptr_t callerPc, int line)
 {
     return callerPc == EA_PROG_TIMER_ASSERT_RETURN_PC && line == 497;
+}
+
+bool isReadableEaRecord(uintptr_t address)
+{
+    return address >= ESP32_DRAM_START && address <= ESP32_DRAM_LAST_RECORD;
+}
+
+uint32_t readReg32(uintptr_t address)
+{
+    return *reinterpret_cast<volatile const uint32_t *>(address);
 }
 } // namespace
 #endif
@@ -55,8 +69,30 @@ extern "C" void __wrap_r_assert_err(const char *condition, const char *file, int
                    file != nullptr ? file : "?", line, condition != nullptr ? condition : "?");
 #if defined(CONFIG_IDF_TARGET_ESP32)
     if (isEaProgTimerAssert(callerPc, line)) {
-        esp_rom_printf("BT_CTRL_EA_CONTEXT off0=%08x off20=%08x off64=%08x\n", static_cast<unsigned>(ea_env[0]),
-                       static_cast<unsigned>(ea_env[5]), static_cast<unsigned>(ea_env[16]));
+        const uintptr_t primary = ea_env[0];
+        const uintptr_t secondary = ea_env[5];
+        const uintptr_t active = ea_env[16];
+        const auto primaryBytes = reinterpret_cast<volatile const uint8_t *>(primary);
+        const auto secondaryBytes = reinterpret_cast<volatile const uint8_t *>(secondary);
+        const auto activeWords = reinterpret_cast<volatile const uint32_t *>(active);
+        const uint32_t missing = UINT32_MAX;
+
+        esp_rom_printf("BT_CTRL_EA_CONTEXT off0=%08x off20=%08x off64=%08x\n", static_cast<unsigned>(primary),
+                       static_cast<unsigned>(secondary), static_cast<unsigned>(active));
+        esp_rom_printf("BT_CTRL_EA_TIMER mask=%08x target=%08x\n", static_cast<unsigned>(readReg32(EA_FINE_TARGET_INT_MASK_REG)),
+                       static_cast<unsigned>(readReg32(EA_FINE_TARGET_REG)));
+        esp_rom_printf(
+            "BT_CTRL_EA_RECORD p8=%08x p16=%04x p22=%u p25=%u s22=%u s23=%u s24=%u a4=%08x\n",
+            isReadableEaRecord(primary) ? static_cast<unsigned>(*reinterpret_cast<volatile const uint32_t *>(primary + 8))
+                                        : static_cast<unsigned>(missing),
+            isReadableEaRecord(primary) ? static_cast<unsigned>(*reinterpret_cast<volatile const uint16_t *>(primary + 16))
+                                        : static_cast<unsigned>(UINT16_MAX),
+            isReadableEaRecord(primary) ? static_cast<unsigned>(primaryBytes[22]) : static_cast<unsigned>(UINT8_MAX),
+            isReadableEaRecord(primary) ? static_cast<unsigned>(primaryBytes[25]) : static_cast<unsigned>(UINT8_MAX),
+            isReadableEaRecord(secondary) ? static_cast<unsigned>(secondaryBytes[22]) : static_cast<unsigned>(UINT8_MAX),
+            isReadableEaRecord(secondary) ? static_cast<unsigned>(secondaryBytes[23]) : static_cast<unsigned>(UINT8_MAX),
+            isReadableEaRecord(secondary) ? static_cast<unsigned>(secondaryBytes[24]) : static_cast<unsigned>(UINT8_MAX),
+            isReadableEaRecord(active) ? static_cast<unsigned>(activeWords[1]) : static_cast<unsigned>(missing));
     }
     if (line == 7098) {
         esp_rom_printf("BT_CTRL_SCO_CONTEXT env=%08x,%08x,%08x sw_to_hw14=%u\n",
