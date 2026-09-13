@@ -1057,6 +1057,12 @@ void RadioLibInterface::checkStaleRxFlags()
 
 void RadioLibInterface::periodicRadioMaintenance()
 {
+    // UNSET is an explicit policy state: LoRa RX/TX are intentionally held silent, so there is no
+    // meaningful radio-health signal to recover here. Do not let the chip recovery ladder turn an
+    // intentionally silent test/device into re-init attempts or a reboot.
+    if (config.lora.region == meshtastic_Config_LoRaConfig_RegionCode_UNSET)
+        return;
+
     // Every startReceive() call site is event-driven (RX/TX ISR, the CAD-busy branch, reconfigure), and a
     // radio left with RX off can no longer raise an RX interrupt - on a node with nothing to transmit
     // nothing would ever re-arm it. This periodic tick is that retry; maybeRecoverChipStateLoss() throttles.
@@ -1091,6 +1097,12 @@ void RadioLibInterface::periodicRadioMaintenance()
 
 bool RadioLibInterface::maybeRecoverChipStateLoss()
 {
+    // Hot-path callers can reach this independently of periodic maintenance. Region UNSET deliberately
+    // disables LoRa operation, so a failed RX/TX arm is not evidence of chip state loss and must never
+    // escalate into the recovery/reboot ladder.
+    if (config.lora.region == meshtastic_Config_LoRaConfig_RegionCode_UNSET)
+        return false;
+
     // One attempt per window: the transient resets this recovers from need a single re-init, and a
     // chip that stays dead must not stall the TX/RX paths with a begin() attempt on every call
     if (lastChipRecoveryMs && Throttle::isWithinTimespanMs(lastChipRecoveryMs, 30 * 1000UL)) {
