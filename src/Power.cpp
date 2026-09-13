@@ -30,6 +30,9 @@
 #include "power/SGM41562.h"
 #include "sleep.h"
 #ifdef ARCH_ESP32
+#if defined(CONFIG_IDF_TARGET_ESP32)
+extern "C" bool esp32BtControllerConsumeEaRestartRequest();
+#endif
 // #include <driver/adc.h>
 #include <esp_adc/adc_cali.h>
 #include <esp_adc/adc_cali_scheme.h>
@@ -1012,6 +1015,16 @@ bool Power::setup()
 
 void Power::powerCommandsCheck()
 {
+#if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
+    // The controller assertion wrapper only marks the exact observed EA deadline-race signature.
+    // Restart from normal application context without mutating or cleanly deinitializing the already-
+    // inconsistent controller. A plain ESP restart is the reset boundary proven to restore BLE RF.
+    if (esp32BtControllerConsumeEaRestartRequest()) {
+        LOG_ERROR("BT controller EA invariant lost; restarting");
+        ESP.restart();
+    }
+#endif
+
     // 0 means "not scheduled" for both, and reads as long expired - test it first.
     if (rebootAtMsec && Throttle::deadlinePassed(rebootAtMsec)) {
         LOG_INFO("Rebooting");

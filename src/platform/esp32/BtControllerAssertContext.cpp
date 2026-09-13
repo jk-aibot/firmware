@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cstdint>
 
 #include "architecture.h"
@@ -22,12 +23,15 @@ constexpr uintptr_t EA_PROG_TIMER_ASSERT_RETURN_PC = 0x400150b6U;
 constexpr uintptr_t EA_FINE_TARGET_INT_MASK_REG = 0x3ff7100cU;
 constexpr uintptr_t EA_FINE_TARGET_INT_STATUS_REG = 0x3ff71010U;
 constexpr uintptr_t EA_FINE_TARGET_REG = 0x3ff710b8U;
+constexpr uint32_t EA_OBSERVED_INT_MASK = 0x0003c802U;
+constexpr uint32_t EA_OBSERVED_CLOCK_LAG = 4U;
 constexpr uint32_t EA_SLOT_CLOCK_MASK = 0x07ffffffU;
 constexpr uintptr_t ESP32_DRAM_START = 0x3ffae000U;
 constexpr uintptr_t ESP32_DRAM_LAST_RECORD = 0x3fffffe0U;
 constexpr uintptr_t SCO_AUDIO_ASSERT_RETURN_PC = 0x40037edcU;
 constexpr uint8_t DISABLED_SCO_SLOT = UINT8_MAX;
 bool spuriousScoIsrReported;
+std::atomic<bool> eaRestartRequested{false};
 
 bool isSpuriousScoAudioIsrAssert(uintptr_t callerPc, int line)
 {
@@ -99,17 +103,35 @@ extern "C" void __wrap_r_assert_err(const char *condition, const char *file, int
                        static_cast<unsigned>(interruptStatus), static_cast<unsigned>(programmedTarget));
         esp_rom_printf("BT_CTRL_EA_CLOCK slot=%08x half=%08x requested=%08x\n", static_cast<unsigned>(currentSlot),
                        static_cast<unsigned>(currentHalfSlot), static_cast<unsigned>(requestedTarget));
+        const uint16_t primaryAsapSettings =
+            isReadableEaRecord(primary) ? *reinterpret_cast<volatile const uint16_t *>(primary + 16) : UINT16_MAX;
+        const uint8_t primaryPriority = isReadableEaRecord(primary) ? primaryBytes[22] : UINT8_MAX;
+
         esp_rom_printf(
             "BT_CTRL_EA_RECORD p8=%08x p16=%04x p22=%u p25=%u s22=%u s23=%u s24=%u a4=%08x\n",
-            static_cast<unsigned>(primaryTimestamp),
-            isReadableEaRecord(primary) ? static_cast<unsigned>(*reinterpret_cast<volatile const uint16_t *>(primary + 16))
-                                        : static_cast<unsigned>(UINT16_MAX),
-            isReadableEaRecord(primary) ? static_cast<unsigned>(primaryBytes[22]) : static_cast<unsigned>(UINT8_MAX),
-            static_cast<unsigned>(primaryStartLatency),
+            static_cast<unsigned>(primaryTimestamp), static_cast<unsigned>(primaryAsapSettings),
+            static_cast<unsigned>(primaryPriority), static_cast<unsigned>(primaryStartLatency),
             isReadableEaRecord(secondary) ? static_cast<unsigned>(secondaryBytes[22]) : static_cast<unsigned>(UINT8_MAX),
             isReadableEaRecord(secondary) ? static_cast<unsigned>(secondaryBytes[23]) : static_cast<unsigned>(UINT8_MAX),
             isReadableEaRecord(secondary) ? static_cast<unsigned>(secondaryBytes[24]) : static_cast<unsigned>(UINT8_MAX),
             isReadableEaRecord(active) ? static_cast<unsigned>(activeWords[1]) : static_cast<unsigned>(missing));
+
+        // v6 proved that manipulating the fine-target comparator/mask can avoid the panic while leaving
+        // BLE RF-silent. Do not mutate controller state here. For the exact two-board signature only,
+        // request a fail-closed application-context restart and return from the ROM assertion callback.
+        // A second assertion before the main loop consumes the request remains fatal.
+        const bool exactObservedEaDeadlineRace =
+            interruptMask == EA_OBSERVED_INT_MASK && interruptStatus == 0U && programmedTarget == requestedTarget &&
+            currentSlot == currentHalfSlot && ((requestedTarget - currentSlot) & EA_SLOT_CLOCK_MASK) == EA_OBSERVED_CLOCK_LAG &&
+            secondary == 0U && active == 0U && primaryAsapSettings == 0U && primaryPriority == 5U && primaryStartLatency == 2U;
+
+        bool expected = false;
+        if (exactObservedEaDeadlineRace &&
+            eaRestartRequested.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+            esp_rom_printf("BT_CTRL_EA_RESTART_REQUESTED target=%08x requested=%08x\n", static_cast<unsigned>(programmedTarget),
+                           static_cast<unsigned>(requestedTarget));
+            return;
+        }
     }
     if (line == 7098) {
         esp_rom_printf("BT_CTRL_SCO_CONTEXT env=%08x,%08x,%08x sw_to_hw14=%u\n",
@@ -120,6 +142,13 @@ extern "C" void __wrap_r_assert_err(const char *condition, const char *file, int
 #endif
     __real_r_assert_err(condition, file, line);
 }
+
+#if defined(CONFIG_IDF_TARGET_ESP32)
+extern "C" bool esp32BtControllerConsumeEaRestartRequest()
+{
+    return eaRestartRequested.exchange(false, std::memory_order_relaxed);
+}
+#endif
 
 extern "C" void __wrap_r_assert_param(uint32_t param0, uint32_t param1, const char *file, int line)
 {
