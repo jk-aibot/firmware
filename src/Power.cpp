@@ -1013,10 +1013,8 @@ bool Power::setup()
 void Power::powerCommandsCheck()
 {
 #if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
-    // The controller assertion wrapper only marks the exact observed EA deadline-race signature.
-    // Restart from normal application context without mutating or cleanly deinitializing the already-
-    // inconsistent controller. Keep this fail-closed path on its existing software reset; explicit clean
-    // reboots can use a stronger reset boundary without broadening the assertion intervention.
+    // Consume the exact EA race request in app context without touching the inconsistent controller.
+    // Keep this path on software reset; explicit clean reboots use the stronger RTC reset separately.
     if (esp32BtControllerConsumeEaRestartRequest()) {
         LOG_ERROR("BT controller EA invariant lost; restarting");
         ESP.restart();

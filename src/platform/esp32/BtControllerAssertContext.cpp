@@ -116,10 +116,8 @@ extern "C" void __wrap_r_assert_err(const char *condition, const char *file, int
             isReadableEaRecord(secondary) ? static_cast<unsigned>(secondaryBytes[24]) : static_cast<unsigned>(UINT8_MAX),
             isReadableEaRecord(active) ? static_cast<unsigned>(activeWords[1]) : static_cast<unsigned>(missing));
 
-        // v6 proved that manipulating the fine-target comparator/mask can avoid the panic while leaving
-        // BLE RF-silent. Do not mutate controller state here. For the exact two-board signature only,
-        // request a fail-closed application-context restart and return from the ROM assertion callback.
-        // A second assertion before the main loop consumes the request remains fatal.
+        // Never mutate controller state after this proven race; v6 avoided panic but left BLE RF-silent.
+        // Request one fail-closed main-loop restart; a second assert before consumption remains fatal.
         const bool exactObservedEaDeadlineRace =
             interruptMask == EA_OBSERVED_INT_MASK && interruptStatus == 0U && programmedTarget == requestedTarget &&
             currentSlot == currentHalfSlot && ((requestedTarget - currentSlot) & EA_SLOT_CLOCK_MASK) == EA_OBSERVED_CLOCK_LAG &&
