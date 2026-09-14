@@ -73,7 +73,13 @@ bool PacketAPI::receivePacket(void)
             meshtastic_MeshPacket *mp = &mr->packet;
             mp->transport_mechanism = meshtastic_MeshPacket_TransportMechanism_TRANSPORT_API;
             printPacket("PACKET FROM QUEUE", mp);
+#if !MESHTASTIC_EXCLUDE_ADMIN
+            const bool localAdminPacket = mp->which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
+                                          mp->decoded.portnum == meshtastic_PortNum_ADMIN_APP;
+            service->handleToRadio(*mp, localAdminPacket ? getLocalAdminSessionId() : 0);
+#else
             service->handleToRadio(*mp);
+#endif
             break;
         }
         case meshtastic_ToRadio_want_config_id_tag: {

@@ -242,19 +242,30 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
     // Before the switch, so every case below sees consistent transaction state.
     expireStaleEditTransaction();
     const bool changesState = !messageIsRequest(r) && !messageIsResponse(r);
-    if (hasOpenEditTransaction && changesState && editTransactionOwner != mp.from) {
-        LOG_WARN("Admin edit transaction owned by 0x%08x; rejecting writer 0x%08x", editTransactionOwner, mp.from);
+    const bool localWriter = mp.from == 0;
+    const bool ownerMismatch = localWriter
+                                   ? (currentLocalAdminSession == 0 || editTransactionLocalOwner != currentLocalAdminSession)
+                                   : editTransactionOwner != mp.from;
+    if (hasOpenEditTransaction && changesState && ownerMismatch) {
+        LOG_WARN("Admin edit transaction owner mismatch; rejecting writer 0x%08x", mp.from);
         myReply = allocErrorResponse(meshtastic_Routing_Error_BAD_REQUEST, &mp);
         return handled;
     }
     if (r->which_payload_variant == meshtastic_AdminMessage_begin_edit_settings_tag) {
-        if (!hasOpenEditTransaction)
-            editTransactionOwner = mp.from;
-        if (mp.from == 0 && editTransactionOriginalDest == 0)
+        if (!hasOpenEditTransaction) {
+            if (localWriter && currentLocalAdminSession == 0) {
+                myReply = allocErrorResponse(meshtastic_Routing_Error_BAD_REQUEST, &mp);
+                return handled;
+            }
+            editTransactionOwner = localWriter ? 0 : mp.from;
+            editTransactionLocalOwner = localWriter ? currentLocalAdminSession : 0;
+        }
+        if (localWriter && editTransactionOriginalDest == 0 && !isBroadcast(mp.to))
             editTransactionOriginalDest = mp.to;
     } else if (r->which_payload_variant == meshtastic_AdminMessage_commit_edit_settings_tag) {
         editTransactionOriginalDest = 0;
         editTransactionOwner = 0;
+        editTransactionLocalOwner = 0;
     }
 
     switch (r->which_payload_variant) {
@@ -1916,6 +1927,11 @@ NodeNum AdminModule::getEditTransactionOriginalDest() const
                : 0;
 }
 
+NodeNum AdminModule::getEditTransactionOriginalDestForSession(uint32_t sessionId) const
+{
+    return sessionId != 0 && editTransactionLocalOwner == sessionId ? getEditTransactionOriginalDest() : 0;
+}
+
 // Without this, a commit that never arrives leaves the transaction open forever and every later
 // config write from any client is applied, acknowledged, and then never saved.
 void AdminModule::expireStaleEditTransaction()
@@ -1925,6 +1941,7 @@ void AdminModule::expireStaleEditTransaction()
 
     editTransactionOriginalDest = 0;
     editTransactionOwner = 0;
+    editTransactionLocalOwner = 0;
     LOG_WARN("Edit transaction abandoned for %us; committing what it applied", EDIT_TRANSACTION_IDLE_MS / 1000);
     hasOpenEditTransaction = false;
     const int segments = deferredEditSegments;
