@@ -3,7 +3,7 @@
 #include "architecture.h"
 #include "sdkconfig.h"
 
-#if defined(ARCH_ESP32)
+#if defined(CONFIG_IDF_TARGET_ESP32)
 
 extern "C" int esp_rom_printf(const char *format, ...);
 extern "C" void __real_r_assert_err(const char *condition, const char *file, int line);
