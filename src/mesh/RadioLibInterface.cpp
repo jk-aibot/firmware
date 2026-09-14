@@ -814,7 +814,9 @@ void RadioLibInterface::handleReceiveInterrupt(const CapturedRxInfo *captured)
 
 #ifndef DISABLE_WELCOME_UNSET
     if (config.lora.region == meshtastic_Config_LoRaConfig_RegionCode_UNSET) {
-        LOG_WARN("lora rx disabled: Region unset");
+        // Region UNSET intentionally disables mesh receive. This is policy, not a radio-health failure,
+        // so keep the hot receive path quiet while still accounting the observed airtime.
+        LOG_DEBUG("lora rx disabled: Region unset");
         airTime->logAirtime(RX_ALL_LOG, rxMsec);
         if (!captured) // for a captured frame the readout task's readData() already cleared them
             clearReadIrqs();
