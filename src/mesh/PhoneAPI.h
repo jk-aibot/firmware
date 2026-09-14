@@ -232,6 +232,11 @@ class PhoneAPI
     /// If we haven't heard from the other side in a while then say not connected. Returns true if timeout occurred
     bool checkConnectionTimeout();
 
+#if !MESHTASTIC_EXCLUDE_ADMIN
+    // Stable for one physical API connection; changes after close/reconnect. Zero means slot exhaustion.
+    uint32_t getLocalAdminSessionId();
+#endif
+
     /// Check the current underlying physical link to see if the client is currently connected
     virtual bool checkIsConnected() = 0;
 

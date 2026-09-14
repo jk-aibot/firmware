@@ -50,8 +50,10 @@ class AdminModule : public ProtobufModule<meshtastic_AdminMessage>, public Obser
 #ifdef PIO_UNIT_TESTING
     int lastSaveWhatForTest = 0;
 #endif
-    // `mp.from` for the open transaction; local phone transports use 0.
+    // Remote owner node number, plus a per-connection token for local BLE/USB/TCP transactions.
     NodeNum editTransactionOwner = 0;
+    uint32_t editTransactionLocalOwner = 0;
+    uint32_t currentLocalAdminSession = 0;
     // Local destination seen at transaction begin; used to resolve phone writes after rekey.
     NodeNum editTransactionOriginalDest = 0;
 
@@ -109,6 +111,9 @@ class AdminModule : public ProtobufModule<meshtastic_AdminMessage>, public Obser
 
     /// Local destination recorded at begin_edit_settings, or 0 when no alias is active.
     NodeNum getEditTransactionOriginalDest() const;
+    /// Same alias, but only for the local connection that owns the edit transaction.
+    NodeNum getEditTransactionOriginalDestForSession(uint32_t sessionId) const;
+    void setLocalAdminSessionForDispatch(uint32_t sessionId) { currentLocalAdminSession = sessionId; }
 
   private:
     // An admin response has no session passkey and its sender need not hold an admin key, so a

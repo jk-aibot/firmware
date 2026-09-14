@@ -21,15 +21,22 @@ class AdminModuleTestShim : public AdminModule
     meshtastic_MeshPacket *reply() { return myReply; }
 
     // With an "open edit transaction" saveChanges() is a pure no-op: no reloadConfig/saveToDisk/reboot.
-    // Stamps the clock like begin_edit_settings, so a slow suite can't age the transaction into expiry.
+    // Stamps the clock like begin_edit_settings and claims local ownership the way a real phone
+    // client's begin does, so the owner-mismatch gate admits this suite's from==0 setters.
     void deferSaves()
     {
+        if (!hasOpenEditTransaction) {
+            editTransactionOwner = 0;
+            editTransactionLocalOwner = 1;
+        }
+        setLocalAdminSessionForDispatch(1);
         hasOpenEditTransaction = true;
         editTransactionActivityMs = millis();
     }
     int savedSegments() const { return lastSaveWhatForTest; }
 
     bool editTransactionOpen() const { return hasOpenEditTransaction; }
+    void setLocalSession(uint32_t id) { setLocalAdminSessionForDispatch(id); }
     // Backdate past the idle window so a test sees an abandoned transaction without waiting it out.
     void ageEditTransaction() { editTransactionActivityMs = millis() - EDIT_TRANSACTION_IDLE_MS - 1; }
 

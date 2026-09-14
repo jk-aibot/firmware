@@ -2513,6 +2513,7 @@ void setUp(void)
     mockMeshService = new MockMeshService();
     service = mockMeshService;
     testAdmin = new AdminModuleTestShim();
+    testAdmin->setLocalSession(1);
     capturedWarnings.clear();
     // Every test gets its own NodeDB and its own copy of the globals the admin handlers write.
     replaceAdminRadioGlobals();

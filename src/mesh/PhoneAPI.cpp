@@ -55,6 +55,28 @@ void releaseFilesManifest(std::vector<meshtastic_FileInfo> &filesManifest)
 // Flag to indicate a heartbeat was received and we should send queue status
 bool heartbeatReceived = false;
 
+#if !MESHTASTIC_EXCLUDE_ADMIN
+namespace
+{
+constexpr size_t MAX_LOCAL_ADMIN_SESSION_SLOTS = 8;
+struct LocalAdminSessionSlot {
+    const PhoneAPI *who = nullptr;
+    uint32_t id = 0;
+};
+LocalAdminSessionSlot localAdminSessionSlots[MAX_LOCAL_ADMIN_SESSION_SLOTS];
+concurrency::Lock localAdminSessionLock;
+uint32_t nextLocalAdminSessionId = 1;
+
+uint32_t allocateLocalAdminSessionId()
+{
+    uint32_t id = nextLocalAdminSessionId++;
+    if (id == 0)
+        id = nextLocalAdminSessionId++;
+    return id;
+}
+} // namespace
+#endif
+
 #ifdef MESHTASTIC_PHONEAPI_ACCESS_CONTROL
 // Auth-slot table and status-slot table are both sized to the typical
 // SerialConsole + BluetoothPhoneAPI footprint plus room for WiFi/TCP
@@ -265,6 +287,25 @@ PhoneAPI::~PhoneAPI()
 #endif
 }
 
+#if !MESHTASTIC_EXCLUDE_ADMIN
+uint32_t PhoneAPI::getLocalAdminSessionId()
+{
+    concurrency::LockGuard guard(&localAdminSessionLock);
+    for (auto &slot : localAdminSessionSlots)
+        if (slot.who == this)
+            return slot.id;
+    for (auto &slot : localAdminSessionSlots) {
+        if (slot.who == nullptr) {
+            slot.who = this;
+            slot.id = allocateLocalAdminSessionId();
+            return slot.id;
+        }
+    }
+    LOG_WARN("Local admin session table full; reject transactional ownership");
+    return 0;
+}
+#endif
+
 void PhoneAPI::handleStartConfig()
 {
     // Must be before setting state (because state is how we know !connected)
@@ -416,6 +457,16 @@ void PhoneAPI::close()
         }
 #endif
     }
+
+#if !MESHTASTIC_EXCLUDE_ADMIN
+    concurrency::LockGuard guard(&localAdminSessionLock);
+    for (auto &slot : localAdminSessionSlots) {
+        if (slot.who == this) {
+            slot = {};
+            break;
+        }
+    }
+#endif
 }
 
 bool PhoneAPI::checkConnectionTimeout()
@@ -1910,7 +1961,13 @@ bool PhoneAPI::handleToRadioPacket(meshtastic_MeshPacket &p)
                   meshtastic_PortNum_WAYPOINT_APP, meshtastic_PortNum_ALERT_APP, meshtastic_PortNum_TELEMETRY_APP,
                   meshtastic_PortNum_TEXT_MESSAGE_APP))
         lastPortNumToRadio[p.decoded.portnum] = millis();
+#if !MESHTASTIC_EXCLUDE_ADMIN
+    const bool localAdminPacket =
+        p.which_payload_variant == meshtastic_MeshPacket_decoded_tag && p.decoded.portnum == meshtastic_PortNum_ADMIN_APP;
+    service->handleToRadio(p, localAdminPacket ? getLocalAdminSessionId() : 0);
+#else
     service->handleToRadio(p);
+#endif
     return true;
 }
 

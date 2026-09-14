@@ -10,6 +10,7 @@
 #include "MeshRadio.h"
 #include "MeshTypes.h"
 #include "Observer.h"
+#include "concurrency/Lock.h"
 #ifdef ARCH_PORTDUINO
 #include "PointerQueue.h"
 #else
@@ -79,6 +80,9 @@ class MeshService
 
     /// Updated in loop() to detect when fromNum changes
     uint32_t oldFromNum = 0;
+#if !MESHTASTIC_EXCLUDE_ADMIN
+    concurrency::Lock localAdminDispatchLock;
+#endif
 
   public:
     enum APIState {
@@ -175,7 +179,7 @@ class MeshService
      * Called by PhoneAPI.handleToRadio.  Note: p is a scratch buffer, this function is allowed to write to it but it can not keep
      * a reference
      */
-    void handleToRadio(meshtastic_MeshPacket &p);
+    void handleToRadio(meshtastic_MeshPacket &p, uint32_t localAdminSessionId = 0);
 
 #if MESHTASTIC_ENABLE_FRAME_INJECTION
     /// Test/debug seam (build-flag gated, off by default): deliver a client-supplied frame into the
