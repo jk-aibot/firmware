@@ -400,6 +400,19 @@ static void test_alias_broadcastBegin_doesNotCapture()
     sendCommit();
 }
 
+static void test_alias_repeatedBeginCannotCaptureAfterBroadcastOpen()
+{
+    sendBeginTo(NODENUM_BROADCAST);
+    TEST_ASSERT_TRUE(admin->editTransactionOpen());
+    TEST_ASSERT_EQUAL_UINT32(0, admin->getEditTransactionOriginalDest());
+
+    sendBeginTo(ORIGINAL_SELF);
+    TEST_ASSERT_TRUE(admin->editTransactionOpen());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, admin->getEditTransactionOriginalDest(),
+                                     "repeated begin must not redefine the transaction alias");
+    sendCommit();
+}
+
 static void test_phoneApi_localSessions_areDistinctAndRenewOnClose()
 {
     LocalSessionPhoneAPITestShim first;
@@ -616,6 +629,7 @@ void setup()
     RUN_TEST(test_alias_remoteCommit_doesNotTerminateLocalTransaction);
     RUN_TEST(test_alias_remoteBegin_doesNotCapture);
     RUN_TEST(test_alias_broadcastBegin_doesNotCapture);
+    RUN_TEST(test_alias_repeatedBeginCannotCaptureAfterBroadcastOpen);
     RUN_TEST(test_phoneApi_localSessions_areDistinctAndRenewOnClose);
     RUN_TEST(test_alias_secondLocalSession_cannotCommitFirstSession);
 

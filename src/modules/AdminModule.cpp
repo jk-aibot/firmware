@@ -252,7 +252,8 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
         return handled;
     }
     if (r->which_payload_variant == meshtastic_AdminMessage_begin_edit_settings_tag) {
-        if (!hasOpenEditTransaction) {
+        const bool openingTransaction = !hasOpenEditTransaction;
+        if (openingTransaction) {
             if (localWriter && currentLocalAdminSession == 0) {
                 myReply = allocErrorResponse(meshtastic_Routing_Error_BAD_REQUEST, &mp);
                 return handled;
@@ -260,7 +261,7 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
             editTransactionOwner = localWriter ? 0 : mp.from;
             editTransactionLocalOwner = localWriter ? currentLocalAdminSession : 0;
         }
-        if (localWriter && editTransactionOriginalDest == 0 && !isBroadcast(mp.to))
+        if (openingTransaction && localWriter && !isBroadcast(mp.to))
             editTransactionOriginalDest = mp.to;
     } else if (r->which_payload_variant == meshtastic_AdminMessage_commit_edit_settings_tag) {
         editTransactionOriginalDest = 0;
