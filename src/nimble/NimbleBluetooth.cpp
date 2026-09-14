@@ -291,7 +291,8 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
                 (!ble_hs_synced() || hasPendingFailedConnection() ||
                  (!BLEDevice::getAdvertising()->isAdvertising() && !nimbleBluetooth->startAdvertising()))) {
                 pendingStartAdvertising = true;
-                return 200;
+                setIntervalFromNow(200);
+                return RUN_SAME;
             }
         }
 
@@ -319,14 +320,20 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
             runOnceHandleToPhoneQueue(); // push data from getFromRadio to onRead
         }
 
+        uint32_t nextDelay = INT32_MAX;
 #if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
-        // Sample host/controller state while idle without restarting advertising that still reports active.
-        if (!bleDraining && nimbleBluetooth && nimbleBluetooth->isActive() && bleServer && bleServer->getConnectedCount() == 0)
-            return kAdvertisingHealthCheckMs;
+        // Keep the original health-check deadline even when BLE callbacks wake this thread early.
+        if (!bleDraining && nimbleBluetooth && nimbleBluetooth->isActive() && bleServer && bleServer->getConnectedCount() == 0) {
+            const uint32_t elapsed = millis() - lastAdvertisingHealthCheckMs;
+            nextDelay = elapsed >= kAdvertisingHealthCheckMs ? 0 : kAdvertisingHealthCheckMs - elapsed;
+        }
 #endif
 
-        // Otherwise the run is triggered via the BLE callbacks above.
-        return INT32_MAX;
+        // Set the interval here and return RUN_SAME so a concurrent callback wake cannot be overwritten by OSThread::run().
+        setIntervalFromNow(nextDelay);
+        if (pendingStartAdvertising.load(std::memory_order_relaxed))
+            setIntervalFromNow(0);
+        return RUN_SAME;
     }
 
     virtual void onConfigStart() override
