@@ -814,8 +814,7 @@ void RadioLibInterface::handleReceiveInterrupt(const CapturedRxInfo *captured)
 
 #ifndef DISABLE_WELCOME_UNSET
     if (config.lora.region == meshtastic_Config_LoRaConfig_RegionCode_UNSET) {
-        // Region UNSET intentionally disables mesh receive. This is policy, not a radio-health failure,
-        // so keep the hot receive path quiet while still accounting the observed airtime.
+        // UNSET intentionally disables mesh receive; stay quiet while still accounting observed airtime.
         LOG_DEBUG("lora rx disabled: Region unset");
         airTime->logAirtime(RX_ALL_LOG, rxMsec);
         if (!captured) // for a captured frame the readout task's readData() already cleared them
@@ -1059,11 +1058,11 @@ void RadioLibInterface::checkStaleRxFlags()
 
 void RadioLibInterface::periodicRadioMaintenance()
 {
-    // UNSET is an explicit policy state: LoRa RX/TX are intentionally held silent, so there is no
-    // meaningful radio-health signal to recover here. Do not let the chip recovery ladder turn an
-    // intentionally silent test/device into re-init attempts or a reboot.
+#ifndef DISABLE_WELCOME_UNSET
+    // UNSET intentionally disables LoRa, so silence is not a radio-health failure.
     if (config.lora.region == meshtastic_Config_LoRaConfig_RegionCode_UNSET)
         return;
+#endif
 
     // Every startReceive() call site is event-driven (RX/TX ISR, the CAD-busy branch, reconfigure), and a
     // radio left with RX off can no longer raise an RX interrupt - on a node with nothing to transmit
@@ -1099,11 +1098,11 @@ void RadioLibInterface::periodicRadioMaintenance()
 
 bool RadioLibInterface::maybeRecoverChipStateLoss()
 {
-    // Hot-path callers can reach this independently of periodic maintenance. Region UNSET deliberately
-    // disables LoRa operation, so a failed RX/TX arm is not evidence of chip state loss and must never
-    // escalate into the recovery/reboot ladder.
+#ifndef DISABLE_WELCOME_UNSET
+    // Under normal policy, UNSET silence must not escalate into the recovery/reboot ladder.
     if (config.lora.region == meshtastic_Config_LoRaConfig_RegionCode_UNSET)
         return false;
+#endif
 
     // One attempt per window: the transient resets this recovers from need a single re-init, and a
     // chip that stays dead must not stall the TX/RX paths with a begin() attempt on every call
