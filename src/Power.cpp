@@ -1018,7 +1018,8 @@ void Power::powerCommandsCheck()
 #if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
     // The controller assertion wrapper only marks the exact observed EA deadline-race signature.
     // Restart from normal application context without mutating or cleanly deinitializing the already-
-    // inconsistent controller. A plain ESP restart is the reset boundary proven to restore BLE RF.
+    // inconsistent controller. Keep this fail-closed path on its existing software reset; explicit clean
+    // reboots can use a stronger reset boundary without broadening the assertion intervention.
     if (esp32BtControllerConsumeEaRestartRequest()) {
         LOG_ERROR("BT controller EA invariant lost; restarting");
         ESP.restart();
