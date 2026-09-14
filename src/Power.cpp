@@ -35,6 +35,9 @@
 #include <esp_adc/adc_cali_scheme.h>
 #include <esp_adc/adc_oneshot.h>
 #include <esp_err.h>
+#if defined(CONFIG_IDF_TARGET_ESP32)
+#include <rtc_wdt.h>
+#endif
 #endif
 
 #if defined(USB_HOST_PWR_DETECT) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
@@ -1029,6 +1032,30 @@ void Power::powerCommandsCheck()
 #endif
 }
 
+#if defined(ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
+[[noreturn]] static void esp32RtcHardRestart()
+{
+    // RTC_WDT RESET_RTC reaches the reset boundary that recovered RF-silent BLE in hardware.
+    // The 5 s stage window lets pending flash work (NVS counter, prefs writes still settling
+    // after the observers ran) finish before the boundary: a 100 ms cut landed mid-write and
+    // the next boot lost its persisted node number, re-picking a random one.
+    LOG_INFO("Original ESP32: RTC-domain hard restart");
+    rtc_wdt_protect_off();
+    rtc_wdt_disable();
+    rtc_wdt_set_length_of_reset_signal(RTC_WDT_SYS_RESET_SIG, RTC_WDT_LENGTH_3_2us);
+    if (rtc_wdt_set_stage(RTC_WDT_STAGE0, RTC_WDT_STAGE_ACTION_RESET_RTC) != ESP_OK ||
+        rtc_wdt_set_time(RTC_WDT_STAGE0, 5000) != ESP_OK) {
+        rtc_wdt_protect_on();
+        ESP.restart();
+        __builtin_unreachable();
+    }
+    rtc_wdt_enable();
+    rtc_wdt_protect_on();
+    while (true)
+        delay(10);
+}
+#endif
+
 void Power::reboot()
 {
     notifyReboot.notifyObservers(NULL);
@@ -1036,12 +1063,20 @@ void Power::reboot()
     waypointStore.saveToFlash();
 #endif
 #if defined(ARCH_ESP32)
-#if defined(CONFIG_IDF_TARGET_ESP32) && !MESHTASTIC_EXCLUDE_BLUETOOTH
-    // A clean host/controller stop gives original ESP32 a stronger Bluetooth reset seam than ESP.restart() alone.
-    if (nimbleBluetooth && nimbleBluetooth->isActive())
+#if defined(CONFIG_IDF_TARGET_ESP32)
+    bool useRtcHardReset = false;
+#if !MESHTASTIC_EXCLUDE_BLUETOOTH
+    // Use the RTC reset only when an explicit reboot starts with original-ESP32 Bluetooth active.
+    useRtcHardReset = nimbleBluetooth && nimbleBluetooth->isActive();
+    if (useRtcHardReset)
         nimbleBluetooth->deinit();
 #endif
+    if (useRtcHardReset)
+        esp32RtcHardRestart();
     ESP.restart();
+#else
+    ESP.restart();
+#endif
 #elif defined(ARCH_NRF52)
     nrf52FlashQuiesce();
     NVIC_SystemReset();
