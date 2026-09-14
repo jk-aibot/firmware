@@ -36,17 +36,16 @@ inline void setTestMonotonicMs64(uint64_t ms)
     testNowMs64.store(ms, std::memory_order_relaxed);
     useTestNative64.store(true, std::memory_order_relaxed);
 }
-// Restore real-clock behaviour (call in test tearDown if a suite mixes real and fake time).
+// Zero the published wrap carry. Suites that assert absolute uptime values call this in setUp():
+// a previous case that moved the test clock backwards left a counted wrap behind.
+void resetMonotonicForTests();
+// Restore real-clock behaviour without retaining a future injected monotonic snapshot.
 inline void useRealClock()
 {
     useTestClock.store(false, std::memory_order_relaxed);
     testNowMs.store(0, std::memory_order_relaxed);
-    useTestNative64.store(false, std::memory_order_relaxed);
-    testNowMs64.store(0, std::memory_order_relaxed);
+    resetMonotonicForTests();
 }
-// Zero the published wrap carry. Suites that assert absolute uptime values call this in setUp():
-// a previous case that moved the test clock backwards left a counted wrap behind.
-void resetMonotonicForTests();
 void setMonotonicPublishHookForTests(MonotonicPublishHook hook);
 #endif
 

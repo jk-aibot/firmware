@@ -317,12 +317,13 @@ void test_native64_injection_drives_pure_reads_and_useRealClock_disarms()
     TEST_ASSERT_EQUAL_UINT64(0x10ull, Time::getMillisMonotonic());
 
     Time::resetMonotonicForTests();
-    Time::setTestMonotonicMs64(0x900000000ull); // arm native-64 so the disarm has an effect to undo
-    Time::useRealClock();                       // disarm: the platform's own carry domain answers again
-    Time::setTestMillis(0xFFFFFF00u);
+    Time::setTestMonotonicMs64(0x900000000ull);
     Time::serviceMonotonic();
-    Time::advanceTestMillis(0x200u);
-    TEST_ASSERT_EQUAL_UINT64(0x100000100ull, Time::getMillisMonotonic());
+    TEST_ASSERT_EQUAL_UINT64(0x900000000ull, Time::getMillisMonotonic());
+
+    Time::useRealClock();
+    const uint64_t realNow = Time::getMillisMonotonic();
+    TEST_ASSERT_TRUE_MESSAGE(realNow < 0x900000000ull, "real clock must not retain the injected high-water mark");
 }
 
 // --- concurrent readers ---
