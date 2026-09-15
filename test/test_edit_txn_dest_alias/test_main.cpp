@@ -392,7 +392,7 @@ static void test_alias_remoteBegin_doesNotCapture(void)
     TEST_ASSERT_EQUAL_UINT32(ORIGINAL_SELF, admin->getEditTransactionOriginalDest());
 }
 
-static void test_alias_broadcastBegin_doesNotCapture()
+static void test_alias_broadcastBegin_doesNotCaptureAlias()
 {
     sendBeginTo(NODENUM_BROADCAST);
     TEST_ASSERT_TRUE(admin->editTransactionOpen());
@@ -490,7 +490,7 @@ static void test_handleToRadio_multipleRekeys_eachRewrittenToCurrentSelf(void)
 }
 
 // Post-commit: alias is cleared, so no further rewrites even on packets addressed to the old self.
-static void test_handleToRadio_afterCommit_noRewrite(void)
+static void test_handleToRadio_afterCommit_noRewriteOfAlias(void)
 {
     sendBegin();                              // alias = ORIGINAL_SELF
     myNodeInfo.my_node_num = POST_REKEY_SELF; // (the rekey happened during the session)
@@ -628,7 +628,7 @@ void setup()
     RUN_TEST(test_alias_repeatedBeginAfterRekey_preservesOriginalDest);
     RUN_TEST(test_alias_remoteCommit_doesNotTerminateLocalTransaction);
     RUN_TEST(test_alias_remoteBegin_doesNotCapture);
-    RUN_TEST(test_alias_broadcastBegin_doesNotCapture);
+    RUN_TEST(test_alias_broadcastBegin_doesNotCaptureAlias);
     RUN_TEST(test_alias_repeatedBeginCannotCaptureAfterBroadcastOpen);
     RUN_TEST(test_phoneApi_localSessions_areDistinctAndRenewOnClose);
     RUN_TEST(test_alias_secondLocalSession_cannotCommitFirstSession);
@@ -637,7 +637,7 @@ void setup()
     RUN_TEST(test_handleToRadio_unchangedIdentity_noRewrite);
     RUN_TEST(test_handleToRadio_oneRekey_rewritesToCurrentSelf);
     RUN_TEST(test_handleToRadio_multipleRekeys_eachRewrittenToCurrentSelf);
-    RUN_TEST(test_handleToRadio_afterCommit_noRewrite);
+    RUN_TEST(test_handleToRadio_afterCommit_noRewriteOfAlias);
     RUN_TEST(test_handleToRadio_afterIdleExpiry_noRewrite);
     RUN_TEST(test_handleToRadio_encryptedPayload_notRewritten);
     RUN_TEST(test_handleToRadio_nonAdminPort_notRewritten);
