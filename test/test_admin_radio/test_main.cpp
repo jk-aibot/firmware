@@ -1399,6 +1399,72 @@ static void test_restorePreferences_ownerIsVisibleThroughSelfNodeImmediately()
     FSCom.remove(backupFileName);
 }
 
+static void test_restorePreferences_missingSelfIsRecreatedAtIndexZero()
+{
+    constexpr NodeNum otherNode = 0x12345678;
+    const uint32_t self = nodeDB->getNodeNum();
+    const meshtastic_User originalOwner = owner;
+    const auto originalSecurity = config.security;
+    meshtastic_NodeInfoLite *selfEntry = nodeDB->getMeshNode(self);
+    TEST_ASSERT_NOT_NULL(selfEntry);
+    const meshtastic_NodeInfoLite originalSelf = *selfEntry;
+    // Hermetic precondition: earlier cases in this suite persist their node DBs, and this test's
+    // compaction argument needs the DB to hold exactly our self before otherNode is added.
+    // removeNodeByNum() also collapses duplicate entries for the same num, so rescan after each
+    // removal instead of walking indices downward.
+    bool purged = true;
+    while (purged) {
+        purged = false;
+        for (size_t i = 0; i < nodeDB->getNumMeshNodes(); ++i) {
+            meshtastic_NodeInfoLite *leaked = nodeDB->getMeshNodeByIndex(i);
+            if (leaked->num != self) {
+                nodeDB->removeNodeByNum(leaked->num);
+                purged = true;
+                break;
+            }
+        }
+    }
+    TEST_ASSERT_NULL(nodeDB->getMeshNode(otherNode));
+
+    meshtastic_User backedUpOwner = owner;
+    strncpy(backedUpOwner.long_name, "Backup Owner", sizeof(backedUpOwner.long_name) - 1);
+    backedUpOwner.long_name[sizeof(backedUpOwner.long_name) - 1] = '\0';
+    strncpy(backedUpOwner.short_name, "BKUP", sizeof(backedUpOwner.short_name) - 1);
+    backedUpOwner.short_name[sizeof(backedUpOwner.short_name) - 1] = '\0';
+    config.security.public_key.size = 32;
+    memset(config.security.public_key.bytes, 0x3a, sizeof(config.security.public_key.bytes));
+    backedUpOwner.public_key.size = 32;
+    memcpy(backedUpOwner.public_key.bytes, config.security.public_key.bytes, sizeof(backedUpOwner.public_key.bytes));
+    owner = backedUpOwner;
+    TypeConversions::CopyUserToNodeInfoLite(selfEntry, owner);
+    TEST_ASSERT_TRUE(nodeDB->backupPreferences(meshtastic_AdminMessage_BackupLocation_FLASH));
+
+    // Removing self compacts the other node into index 0, so restore must move recreated self back there.
+    TEST_ASSERT_NOT_NULL(nodeDB->getOrCreateMeshNode(otherNode));
+    nodeDB->removeNodeByNum(self);
+    TEST_ASSERT_NULL(nodeDB->getMeshNode(self));
+    TEST_ASSERT_EQUAL_UINT32(otherNode, nodeDB->getMeshNodeByIndex(0)->num);
+
+    strncpy(owner.long_name, "Changed Owner", sizeof(owner.long_name) - 1);
+    owner.long_name[sizeof(owner.long_name) - 1] = '\0';
+    TEST_ASSERT_TRUE(nodeDB->restorePreferences(meshtastic_AdminMessage_BackupLocation_FLASH, SEGMENT_DEVICESTATE));
+    selfEntry = nodeDB->getMeshNode(self);
+    TEST_ASSERT_NOT_NULL(selfEntry);
+    TEST_ASSERT_EQUAL_PTR(selfEntry, nodeDB->getMeshNodeByIndex(0));
+    TEST_ASSERT_EQUAL_UINT32(self, selfEntry->num);
+    TEST_ASSERT_EQUAL_STRING("Backup Owner", selfEntry->long_name);
+    TEST_ASSERT_EQUAL_STRING("BKUP", selfEntry->short_name);
+
+    nodeDB->removeNodeByNum(otherNode);
+    config.security = originalSecurity;
+    owner = originalOwner;
+    selfEntry = nodeDB->getMeshNode(self);
+    TEST_ASSERT_NOT_NULL(selfEntry);
+    *selfEntry = originalSelf;
+    TEST_ASSERT_TRUE(nodeDB->saveToDisk(SEGMENT_CONFIG | SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE));
+    FSCom.remove(backupFileName);
+}
+
 static void test_restorePreferences_configAndOwnerMigratesIdentity()
 {
     const NodeNum oldSelf = nodeDB->getNodeNum();
@@ -2738,6 +2804,7 @@ void setup()
     RUN_TEST(test_bootDefense_sanitizesStaleLicensedChannelsOnce);
     RUN_TEST(test_restorePreferences_sanitizesLicensedBackupBeforeReturn);
     RUN_TEST(test_restorePreferences_ownerIsVisibleThroughSelfNodeImmediately);
+    RUN_TEST(test_restorePreferences_missingSelfIsRecreatedAtIndexZero);
     RUN_TEST(test_restorePreferences_configAndOwnerMigratesIdentity);
     RUN_TEST(test_restorePreferences_keylessOwnerKeepsActiveSelfKey);
     RUN_TEST(test_restorePreferences_rejectsTruncatedMatchingOwnerKey);
