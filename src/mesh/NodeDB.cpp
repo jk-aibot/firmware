@@ -4920,6 +4920,10 @@ bool NodeDB::restorePreferences(meshtastic_AdminMessage_BackupLocation location,
                     LOG_ERROR("Restore prefs from backup failed");
                     return false;
                 }
+                if (restoredSelf != &meshNodes->at(0)) {
+                    std::swap(meshNodes->at(0), *restoredSelf);
+                    restoredSelf = &meshNodes->at(0);
+                }
             }
 
             if (restoreWhat & SEGMENT_CONFIG) {
